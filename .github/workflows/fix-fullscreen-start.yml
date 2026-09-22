@@ -61,15 +61,12 @@ jobs:
           if ($count -ne 1) { throw "Expected exactly one maximized startup call, found $count." }
           $main = $main.Replace($oldCall, $newCall)
 
-          $oldSeq = $tab + 'pShowWindow.Call(hwnd, SW_SHOW)' + $nl + $tab + 'pUpdateWindow.Call(hwnd)'
-          $newSeq = $oldSeq + $nl + $tab + 'app.toggleFullscreen()'
-          if (-not $main.Contains($oldSeq)) { throw 'Startup show/update anchor not found.' }
-          $main = $main.Replace($oldSeq, $newSeq)
+          $updateCall = $tab + 'pUpdateWindow.Call(hwnd)'
+          $updateCount = ([regex]::Matches($main, [regex]::Escape($updateCall))).Count
+          if ($updateCount -ne 1) { throw "Expected exactly one startup UpdateWindow call, found $updateCount." }
+          $main = $main.Replace($updateCall, $updateCall + [string][char]10 + $tab + 'app.toggleFullscreen()')
 
-          $maxConst = $tab + 'SW_SHOWMAXIMIZED                    = 3' + $nl
-          if ($main.Contains($maxConst)) {
-            $main = $main.Replace($maxConst, '')
-          }
+          $main = [regex]::Replace($main, '(?m)^\tSW_SHOWMAXIMIZED\s+= 3\r?\n', '')
 
           [IO.File]::WriteAllText((Join-Path $PWD $path), $main, (New-Object Text.UTF8Encoding($false)))
           gofmt -w main_windows.go
