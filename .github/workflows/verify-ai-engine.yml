@@ -36,6 +36,10 @@ jobs:
             throw "Unexpected engine archive size: $actualSize (expected $expectedSize)"
           }
           $hash = (Get-FileHash 'realesrgan-windows.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedHash = 'abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d'
+          if ($hash -ne $expectedHash) {
+            throw "Unexpected engine archive SHA-256: $hash (expected $expectedHash)"
+          }
           "AI_ENGINE_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "AI_ENGINE_SIZE=$actualSize" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Archive SHA-256: $hash"
@@ -76,10 +80,9 @@ jobs:
             }
           }
 
+          # The upstream CLI deliberately returns -1 for -h, so validate its help text
+          # rather than treating that documented help exit code as an execution failure.
           $help = & $exe.FullName -h 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            throw "Real-ESRGAN executable help command failed with exit code $LASTEXITCODE"
-          }
           if ($help -notmatch '-s scale' -or $help -notmatch 'realesrgan-x4plus-anime') {
             throw 'Unexpected Real-ESRGAN CLI help output.'
           }
