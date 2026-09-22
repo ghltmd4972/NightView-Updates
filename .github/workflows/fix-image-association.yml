@@ -60,11 +60,6 @@ jobs:
             throw 'Expected legacy hard-coded installer version text was not found.'
           }
 
-          $main = $main.Replace(
-            'var (' + [Environment]::NewLine + [char]9 + 'user32      = syscall.NewLazyDLL("user32.dll")',
-            'var installerVersion = "dev"' + [Environment]::NewLine + [Environment]::NewLine + 'var (' + [Environment]::NewLine + [char]9 + 'user32      = syscall.NewLazyDLL("user32.dll")'
-          )
-
           $old = [char]9 + '_ = createStartMenuShortcut(mainPath)'
           $new = [char]9 + 'associationErr := registerFileAssociations(mainPath)' + [Environment]::NewLine + [char]9 + '_ = createStartMenuShortcut(mainPath)'
           if (-not $main.Contains($old)) { throw 'Start Menu anchor not found.' }
@@ -80,12 +75,13 @@ jobs:
           $main = $main.Replace($oldMsg, $newMsg)
 
           [IO.File]::WriteAllText((Join-Path $PWD $mainPath), $main, (New-Object Text.UTF8Encoding($false)))
+          Copy-Item ..\.nightview_patch\installer_version.go installer\installer_version.go -Force
           Copy-Item ..\.nightview_patch\association_core.go installer\association_core.go -Force
           Copy-Item ..\.nightview_patch\association_core_test.go installer\association_core_test.go -Force
           Copy-Item ..\.nightview_patch\association_windows.go installer\association_windows.go -Force
           Copy-Item ..\.nightview_patch\association_windows_test.go installer\association_windows_test.go -Force
 
-          gofmt -w installer\main_windows.go installer\association_core.go installer\association_core_test.go installer\association_windows.go installer\association_windows_test.go
+          gofmt -w installer\main_windows.go installer\installer_version.go installer\association_core.go installer\association_core_test.go installer\association_windows.go installer\association_windows_test.go
 
           $check = Get-Content installer\main_windows.go -Raw
           if ($check.Contains('NightView 1.4.0 설치가 완료되었습니다.')) { throw 'Hard-coded 1.4.0 text remains.' }
