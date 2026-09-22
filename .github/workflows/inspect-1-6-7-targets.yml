@@ -1,0 +1,46 @@
+name: Inspect NightView 1.6.7 targets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-1-6-7-targets.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+      - name: Print exact target files
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($f in @(
+            'go.mod',
+            'main_windows.go',
+            'core.go',
+            'ai_core.go',
+            'installer\association_core.go',
+            'installer\association_windows.go',
+            'installer\main_windows.go',
+            'installer\association_core_test.go',
+            'installer\association_windows_test.go'
+          )) {
+            if (Test-Path $f) {
+              Write-Host ('===== FILE: ' + $f + ' =====')
+              Get-Content $f
+            }
+          }
