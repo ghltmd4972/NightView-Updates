@@ -70,27 +70,15 @@ jobs:
 
           $updatePath = 'updatecheck_windows.go'
           $update = Get-Content $updatePath -Raw
-          $oldLines = @(
-            $tab + 'updateChecks.mu.Lock()',
-            $tab + 'm := updateChecks.manifest',
-            $tab + 'updateChecks.mu.Unlock()',
-            $tab + 'text := fmt.Sprintf("NightView %s 새 버전이 있습니다.\n\n현재 버전: %s", m.Version, version)'
-          )
-          $newLines = @(
-            $tab + 'updateChecks.mu.Lock()',
-            $tab + 'm := updateChecks.manifest',
-            $tab + 'manual := updateChecks.manual',
-            $tab + 'updateChecks.mu.Unlock()',
-            $tab + 'if manual {',
-            $tab + $tab + 'a.startUpdateInstall(m)',
-            $tab + $tab + 'return',
-            $tab + '}',
-            $tab + 'text := fmt.Sprintf("NightView %s 새 버전이 있습니다.\n\n현재 버전: %s", m.Version, version)'
-          )
-          $oldBlock = $oldLines -join $nl
-          $newBlock = $newLines -join $nl
-          if (-not $update.Contains($oldBlock)) { throw 'onUpdateAvailable anchor not found.' }
-          $update = $update.Replace($oldBlock, $newBlock)
+          $pattern = '(?m)^(\tm := updateChecks\.manifest\r?\n)(\tupdateChecks\.mu\.Unlock\(\)\r?\n)'
+          $matches = [regex]::Matches($update, $pattern)
+          if ($matches.Count -ne 1) { throw "Expected exactly one onUpdateAvailable manifest/unlock sequence, found $($matches.Count)." }
+          $replacement = '$1' + $tab + 'manual := updateChecks.manual' + $nl + '$2' +
+            $tab + 'if manual {' + $nl +
+            $tab + $tab + 'a.startUpdateInstall(m)' + $nl +
+            $tab + $tab + 'return' + $nl +
+            $tab + '}' + $nl
+          $update = [regex]::Replace($update, $pattern, $replacement)
           [IO.File]::WriteAllText((Join-Path $PWD $updatePath), $update, (New-Object Text.UTF8Encoding($false)))
 
           gofmt -w main_windows.go updatecheck_windows.go
