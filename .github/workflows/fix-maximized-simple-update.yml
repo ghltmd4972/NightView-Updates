@@ -1,0 +1,206 @@
+name: Fix maximized startup and simplify update
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-maximized-simple-update.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-maximized-simple-update
+  cancel-in-progress: true
+
+jobs:
+  patch-build-test-stage:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct and verify current source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -lt 1) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $expected = ((Get-Content SOURCE_SHA256.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Current source SHA-256 mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+
+      - name: Patch maximized startup and one-click manual update
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $mainPath = 'main_windows.go'
+          $main = Get-Content $mainPath -Raw
+          if ($main.Contains('SW_SHOWMAXIMIZED')) { throw 'SW_SHOWMAXIMIZED already exists; refusing duplicate patch.' }
+          $oldConst = [char]9 + 'SW_SHOW                             = 5'
+          $newConst = [char]9 + 'SW_SHOWMAXIMIZED                    = 3' + [Environment]::NewLine + $oldConst
+          if (-not $main.Contains($oldConst)) { throw 'SW_SHOW anchor not found.' }
+          $main = $main.Replace($oldConst, $newConst)
+
+          $oldShow = [char]9 + 'pShowWindow.Call(hwnd, SW_SHOW)'
+          $newShow = [char]9 + 'pShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)'
+          $showCount = ([regex]::Matches($main, [regex]::Escape($oldShow))).Count
+          if ($showCount -ne 1) { throw "Expected exactly one startup ShowWindow call, found $showCount." }
+          $main = $main.Replace($oldShow, $newShow)
+          [IO.File]::WriteAllText((Join-Path $PWD $mainPath), $main, (New-Object Text.UTF8Encoding($false)))
+
+          $updatePath = 'updatecheck_windows.go'
+          $update = Get-Content $updatePath -Raw
+          $oldBlock = @'
+	updateChecks.mu.Lock()
+	m := updateChecks.manifest
+	updateChecks.mu.Unlock()
+	text := fmt.Sprintf("NightView %s 새 버전이 있습니다.\n\n현재 버전: %s", m.Version, version)
+'@
+          $newBlock = @'
+	updateChecks.mu.Lock()
+	m := updateChecks.manifest
+	manual := updateChecks.manual
+	updateChecks.mu.Unlock()
+	if manual {
+		a.startUpdateInstall(m)
+		return
+	}
+	text := fmt.Sprintf("NightView %s 새 버전이 있습니다.\n\n현재 버전: %s", m.Version, version)
+'@
+          if (-not $update.Contains($oldBlock)) { throw 'onUpdateAvailable anchor not found.' }
+          $update = $update.Replace($oldBlock, $newBlock)
+          [IO.File]::WriteAllText((Join-Path $PWD $updatePath), $update, (New-Object Text.UTF8Encoding($false)))
+
+          gofmt -w main_windows.go updatecheck_windows.go
+
+          $mainCheck = Get-Content main_windows.go -Raw
+          $updateCheck = Get-Content updatecheck_windows.go -Raw
+          if (-not $mainCheck.Contains('SW_SHOWMAXIMIZED')) { throw 'Maximized constant missing after patch.' }
+          if (-not $mainCheck.Contains('pShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)')) { throw 'Maximized startup call missing after patch.' }
+          if (-not $updateCheck.Contains('manual := updateChecks.manual')) { throw 'Manual-update fast path flag missing.' }
+          if (-not $updateCheck.Contains('a.startUpdateInstall(m)')) { throw 'Manual-update one-click path missing.' }
+
+      - name: Build and run regression tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '1.6.2'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=$version" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+
+          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
+          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
+          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
+          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
+          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
+          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+
+          go test -count=1 .\...
+          go vet -unsafeptr=false .\...
+
+      - name: Native Windows maximized-start smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class NightViewWindowTest {
+              [DllImport("user32.dll")]
+              [return: MarshalAs(UnmanagedType.Bool)]
+              public static extern bool IsZoomed(IntPtr hWnd);
+          }
+          "@
+
+          $p = Start-Process -FilePath (Resolve-Path '.\NightView.exe').Path -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(15)
+            $hwnd = [IntPtr]::Zero
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 250
+              $p.Refresh()
+              if ($p.HasExited) { throw "NightView exited before creating its main window. ExitCode=$($p.ExitCode)" }
+              if ($p.MainWindowHandle -ne 0) {
+                $hwnd = [IntPtr]$p.MainWindowHandle
+                break
+              }
+            }
+            if ($hwnd -eq [IntPtr]::Zero) { throw 'NightView main window was not created within 15 seconds.' }
+            if (-not [NightViewWindowTest]::IsZoomed($hwnd)) { throw 'NightView started, but Windows does not report the main window as maximized.' }
+            Write-Host 'Verified: NightView starts maximized on native Windows.'
+          }
+          finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Repack verified source and prepare 1.6.2 release metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-1.6.2.tar.gz *
+          Pop-Location
+
+          $hash = (Get-FileHash 'nightview-source-1.6.2.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  nightview-source.tar.gz" | Set-Content 'SOURCE_SHA256.txt' -Encoding ascii
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6_2.txt' -Encoding ascii
+          "1.6.2" | Set-Content 'VERSION' -Encoding ascii
+
+          @'
+NightView 1.6.2
+- NightView 실행 시 1280x800 창모드가 아니라 Windows 최대화 상태로 바로 시작
+- 수동으로 '업데이트 확인'을 눌렀을 때 새 버전이 있으면 중복 확인창 없이 바로 다운로드 -> 교체 -> 자동 재실행
+- 프로그램 시작 시 자동으로 새 버전을 발견한 경우에는 기존처럼 설치 여부 확인창 유지
+- 고정 설치 경로의 기존 NightView.exe 교체 방식 유지
+- 설정과 사용자 데이터 보존 유지
+- 업데이트 실패 시 기존 실행 파일 백업/롤백 안전장치 유지
+'@ | Set-Content 'RELEASE_NOTES.txt' -Encoding utf8
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-1.6.2.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Staged 1.6.2 source SHA-256: $hash"
+          Write-Host "Wrote $index source chunks."
+
+      - name: Commit verified 1.6.2 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current SOURCE_SHA256.txt STAGED_SOURCE_SHA256_1_6_2.txt VERSION RELEASE_NOTES.txt
+          if (git diff --cached --quiet) { throw 'No verified changes were produced.' }
+          git commit -m 'Release NightView 1.6.2 maximized startup and simpler updates'
+          git push
