@@ -59,13 +59,13 @@ jobs:
           hoveredButton                     int
           fullscreen                        bool
           savedStyle                        uintptr
-'@
+          '@
           $newStruct = @'
           hoveredButton                     int
           fullscreen                        bool
           fullscreenToolbarVisible          bool
           savedStyle                        uintptr
-'@
+          '@
           $oldStruct = $oldStruct -replace '(?m)^          ', ''
           $newStruct = $newStruct -replace '(?m)^          ', ''
           if (-not $src.Contains($oldStruct)) { throw 'viewerApp fullscreen fields anchor not found.' }
@@ -78,7 +78,7 @@ jobs:
           	}
           	return a.dip(46)
           }
-'@
+          '@
           $newToolbarH = @'
           func (a *viewerApp) toolbarVisualH() int32 {
           	return a.dip(46)
@@ -120,7 +120,7 @@ jobs:
           	}
           	return false
           }
-'@
+          '@
           $oldToolbarH = $oldToolbarH -replace '(?m)^          ', ''
           $newToolbarH = $newToolbarH -replace '(?m)^          ', ''
           if (-not $src.Contains($oldToolbarH)) { throw 'toolbarH function anchor not found.' }
@@ -132,14 +132,14 @@ jobs:
           		return nil
           	}
           	h := a.toolbarH()
-'@
+          '@
           $newButtonLayout = @'
           func (a *viewerApp) buttonLayout() []buttonRect {
           	if a.fullscreen && !a.fullscreenToolbarVisible {
           		return nil
           	}
           	h := a.toolbarVisualH()
-'@
+          '@
           $oldButtonLayout = $oldButtonLayout -replace '(?m)^          ', ''
           $newButtonLayout = $newButtonLayout -replace '(?m)^          ', ''
           if (-not $src.Contains($oldButtonLayout)) { throw 'buttonLayout anchor not found.' }
@@ -150,7 +150,7 @@ jobs:
           		a.drawToolbar(dc)
           		a.drawStatus(dc)
           	}
-'@
+          '@
           $newPaint = @'
           	if !a.fullscreen {
           		a.drawToolbar(dc)
@@ -158,7 +158,7 @@ jobs:
           	} else if a.fullscreenToolbarVisible {
           		a.drawToolbar(dc)
           	}
-'@
+          '@
           $oldPaint = $oldPaint -replace '(?m)^          ', ''
           $newPaint = $newPaint -replace '(?m)^          ', ''
           if (-not $src.Contains($oldPaint)) { throw 'paint toolbar block not found.' }
@@ -192,7 +192,7 @@ jobs:
           	c, _, _ := pLoadCursor.Call(0, IDC_SIZEALL)
           	pSetCursor.Call(c)
           }
-'@
+          '@
           $newLeftDown = @'
           func (a *viewerApp) onLeftDown(p POINT) {
           	if !a.fullscreen || a.fullscreenToolbarVisible {
@@ -219,7 +219,7 @@ jobs:
           	c, _, _ := pLoadCursor.Call(0, IDC_SIZEALL)
           	pSetCursor.Call(c)
           }
-'@
+          '@
           $oldLeftDown = $oldLeftDown -replace '(?m)^          ', ''
           $newLeftDown = $newLeftDown -replace '(?m)^          ', ''
           if (-not $src.Contains($oldLeftDown)) { throw 'onLeftDown function anchor not found.' }
@@ -257,7 +257,7 @@ jobs:
           	c, _, _ := pLoadCursor.Call(0, cid)
           	pSetCursor.Call(c)
           }
-'@
+          '@
           $newMouseMove = @'
           func (a *viewerApp) onMouseMove(p POINT) {
           	toolbarChanged := a.updateFullscreenToolbarVisibility(p)
@@ -299,7 +299,7 @@ jobs:
           	c, _, _ := pLoadCursor.Call(0, cid)
           	pSetCursor.Call(c)
           }
-'@
+          '@
           $oldMouseMove = $oldMouseMove -replace '(?m)^          ', ''
           $newMouseMove = $newMouseMove -replace '(?m)^          ', ''
           if (-not $src.Contains($oldMouseMove)) { throw 'onMouseMove function anchor not found.' }
@@ -311,7 +311,7 @@ jobs:
           			app.toggleFullscreen()
           		}
           		return 0
-'@
+          '@
           $newDoubleClick = @'
           	case WM_LBUTTONDBLCLK:
           		p := pointFromLParam(lParam)
@@ -320,7 +320,7 @@ jobs:
           			app.toggleFullscreen()
           		}
           		return 0
-'@
+          '@
           $oldDoubleClick = $oldDoubleClick -replace '(?m)^          ', ''
           $newDoubleClick = $newDoubleClick -replace '(?m)^          ', ''
           if (-not $src.Contains($oldDoubleClick)) { throw 'fullscreen double-click block not found.' }
@@ -424,7 +424,7 @@ jobs:
           		t.Fatal("fullscreen toolbar state was not cleared")
           	}
           }
-'@
+          '@
           $tests = $tests -replace '(?m)^          ', ''
           [IO.File]::WriteAllText((Join-Path $PWD 'fullscreen_toolbar_windows_test.go'), $tests, (New-Object Text.UTF8Encoding($false)))
           gofmt -w fullscreen_toolbar_windows_test.go
