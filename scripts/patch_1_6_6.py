@@ -255,26 +255,26 @@ compare.write_text(src, encoding="utf-8", newline="\n")
 # ---------------------------------------------------------------------------
 src = ai.read_text(encoding="utf-8")
 
-overwrite_repl = '''\tcase IDYES:
-\t\tsnapshotPath, snapshotCleanup, snapshotErr := stageAICompareOriginalSnapshot(input)
-\t\tif snapshotErr != nil {
-\t\t\ta.onAIUpscaleErrorText("원본 비교용 임시 복사본을 만들지 못해 덮어쓰기를 중단했습니다.\\n\\n" + snapshotErr.Error())
-\t\t\treturn
-\t\t}
-\t\twasCurrent := strings.EqualFold(filepath.Clean(a.currentPath), filepath.Clean(input))
-\t\tif wasCurrent {
-\t\t\ta.disposeCurrentImage()
-\t\t}
-\t\tif err := overwriteAI4KOriginal(result, input); err != nil {
-\t\t\t_ = os.RemoveAll(snapshotCleanup)
-\t\t\tif wasCurrent {
-\t\t\t\ta.openImagePath(input)
-\t\t\t}
-\t\t\ta.onAIUpscaleErrorText("원본 파일에 덮어쓰지 못했습니다.\\n\\n" + err.Error())
-\t\t\treturn
-\t\t}
-\t\tsavedPath = input
-\t\ta.setAICompareCandidateWithCleanup(snapshotPath, savedPath, scale, inputSHA, snapshotCleanup)
+overwrite_repl = r'''	case IDYES:
+		snapshotPath, snapshotCleanup, snapshotErr := stageAICompareOriginalSnapshot(input)
+		if snapshotErr != nil {
+			a.onAIUpscaleErrorText("원본 비교용 임시 복사본을 만들지 못해 덮어쓰기를 중단했습니다.\\n\\n" + snapshotErr.Error())
+			return
+		}
+		wasCurrent := strings.EqualFold(filepath.Clean(a.currentPath), filepath.Clean(input))
+		if wasCurrent {
+			a.disposeCurrentImage()
+		}
+		if err := overwriteAI4KOriginal(result, input); err != nil {
+			_ = os.RemoveAll(snapshotCleanup)
+			if wasCurrent {
+				a.openImagePath(input)
+			}
+			a.onAIUpscaleErrorText("원본 파일에 덮어쓰지 못했습니다.\\n\\n" + err.Error())
+			return
+		}
+		savedPath = input
+		a.setAICompareCandidateWithCleanup(snapshotPath, savedPath, scale, inputSHA, snapshotCleanup)
 '''
 overwrite_start = src.find("\tcase IDYES:")
 overwrite_end = src.find("\tcase aiIDNo:", overwrite_start)
