@@ -1,4 +1,4 @@
-name: Inspect staged NightView AI save flow
+name: Inspect staged NightView AI save implementation
 
 on:
   push:
@@ -24,13 +24,22 @@ jobs:
           [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-source.tar.gz -C buildsrc
-      - name: Inspect AI 4K save flow
+      - name: Print AI save implementation
         shell: pwsh
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host '=== AI/UPSCALE FILES ==='
-          Get-ChildItem -Recurse -Filter *.go | Select-String -Pattern 'upscale|4k|save|writefile|rename|encode|png|jpeg|aiComparison|aiUpscale' -CaseSensitive:$false -Context 12,24 | ForEach-Object {
+          Write-Host '=== AI_WINDOWS_GO ==='
+          Get-Content ai_windows.go | ForEach-Object { Write-Host $_ }
+          Write-Host '=== AI_CORE_GO RELEVANT ==='
+          Get-Content ai_core.go | Select-String -Pattern 'nextAIOutputPath|commitAI|copyFile|replace|save|output' -CaseSensitive:$false -Context 12,30 | ForEach-Object {
+            Write-Host ('--- line ' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
+          Write-Host '=== WINDOWS DIALOG SUPPORT ==='
+          Get-ChildItem -Filter '*.go' | Select-String -Pattern 'GetSaveFileName|OPENFILENAME|SaveFile|choose.*save|save.*dialog|MessageBox|MB_YESNOCANCEL|MB_YESNO' -CaseSensitive:$false -Context 6,14 | ForEach-Object {
             Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
             $_.Context.PreContext | ForEach-Object { Write-Host $_ }
             Write-Host $_.Line
