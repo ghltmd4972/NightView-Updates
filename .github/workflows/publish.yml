@@ -74,7 +74,6 @@ jobs:
 
           go test -c -o ../NightView_tests_windows.exe .
           go test -c -o ../NightViewUpdater_tests_windows.exe ./updater
-          go test -c -o ../NightViewSetup_tests_windows.exe ./installer
 
           go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ../NightViewUpdater.exe ./updater
           go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=${VERSION_VALUE}" -o ../NightView.exe .
@@ -82,6 +81,8 @@ jobs:
           mkdir -p installer/payload
           cp ../NightView.exe installer/payload/NightView.exe
           cp ../NightViewUpdater.exe installer/payload/NightViewUpdater.exe
+
+          go test -c -o ../NightViewSetup_tests_windows.exe ./installer
           go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ../NightViewSetup.exe ./installer
 
       - name: Publish verified binaries and manifest
