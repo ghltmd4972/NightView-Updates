@@ -59,13 +59,7 @@ jobs:
           python scripts\patch_1_6_8.py buildsrc
 
           if (-not (Test-Path buildsrc\testdata\tiny.webp)) {
-            python -m pip install --disable-pip-version-check --quiet pillow
-            New-Item -ItemType Directory -Force buildsrc\testdata | Out-Null
-            @'
-            from PIL import Image
-            img = Image.new("RGBA", (7, 5), (23, 87, 151, 255))
-            img.save(r"buildsrc\testdata\tiny.webp", format="WEBP", lossless=True)
-            '@ | python -
+            throw 'Existing verified WEBP test fixture is missing from 1.6.7 source'
           }
 
           Push-Location buildsrc
