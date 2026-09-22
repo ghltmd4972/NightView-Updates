@@ -49,14 +49,8 @@ jobs:
 
           $mainPath = 'main_windows.go'
           $main = Get-Content $mainPath -Raw
-          $oldKeys = @'
-          switch vk {
-          case VK_LEFT, VK_BACK:
-                  a.navigate(-1)
-          case VK_RIGHT, VK_SPACE:
-                  a.navigate(1)
-          '@
-          $newKeys = @'
+          $keyPattern = '(?ms)\\bswitch vk \\{\\s*case VK_LEFT,\\s*VK_BACK:\\s*a\\.navigate\\(-1\\)\\s*case VK_RIGHT,\\s*VK_SPACE:\\s*a\\.navigate\\(1\\)'
+          $keyReplacement = @'
           switch vk {
           case VK_LEFT:
                   if a.adjustAIComparisonSplit(-0.02) {
@@ -73,8 +67,9 @@ jobs:
           case VK_SPACE:
                   a.navigate(1)
           '@
-          if (-not $main.Contains($oldKeys)) { throw 'Expected keyboard navigation block not found.' }
-          $main = $main.Replace($oldKeys, $newKeys)
+          $matches = [regex]::Matches($main, $keyPattern)
+          if ($matches.Count -ne 1) { throw "Expected exactly one keyboard navigation block, found $($matches.Count)." }
+          $main = [regex]::Replace($main, $keyPattern, $keyReplacement, 1)
           [IO.File]::WriteAllText((Join-Path $PWD $mainPath), $main, (New-Object Text.UTF8Encoding($false)))
 
           $comparePath = 'comparison_windows.go'
