@@ -256,18 +256,9 @@ compare.write_text(src, encoding="utf-8", newline="\n")
 src = ai.read_text(encoding="utf-8")
 
 overwrite_pattern = r'''(?ms)\tcase IDYES:
-\t\twasCurrent := strings\.EqualFold\(filepath\.Clean\(a\.currentPath\), filepath\.Clean\(input\)\)
-\t\tif wasCurrent \{
-\t\t\ta\.disposeCurrentImage\(\)
-\t\t\}
-\t\tif err := overwriteAI4KOriginal\(result, input\); err != nil \{
-\t\t\tif wasCurrent \{
-\t\t\t\ta\.openImagePath\(input\)
-\t\t\t\}
-\t\t\ta\.onAIUpscaleErrorText\("원본 파일에 덮어쓰지 못했습니다\\n\\n" \+ err\.Error\(\)\)
-\t\t\treturn
-\t\t\}
+.*?
 \t\tsavedPath = input
+(?=\tcase aiIDNo:)
 '''
 overwrite_repl = r'''	case IDYES:
 		snapshotPath, snapshotCleanup, snapshotErr := stageAICompareOriginalSnapshot(input)
