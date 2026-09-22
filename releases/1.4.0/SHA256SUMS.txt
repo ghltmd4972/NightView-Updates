@@ -1,0 +1,3 @@
+4212bafa955255209e805c3030a4dd5ddf3399858c76b775ecfbd88572cd8d7b  releases/1.4.0/NightView.exe
+73dfe20c37789b1535394635454aaf055ef86ca072026ffa13e67775c8d4a7e0  releases/1.4.0/NightViewUpdater.exe
+1b0ebd74afc93fa64cb5aff5ba9212f9e32e4e80baf6a740eb79c8d23e491f30  releases/1.4.0/NightViewSetup.exe

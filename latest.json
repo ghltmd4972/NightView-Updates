@@ -1,16 +1,16 @@
 {
   "schema": 1,
   "enabled": true,
-  "version": "1.3.0",
-  "published_at": "2026-09-22T06:26:32Z",
-  "notes": "NightView 1.3.0\n- 프로그램 시작 시 새 버전 자동 확인\n- 우클릭 메뉴에서 수동 업데이트 확인\n- HTTPS 업데이트 파일 다운로드\n- 다운로드 파일 크기 및 SHA-256 검증\n- Windows x64 GUI 실행 파일 형식 검증\n- 고정 설치 경로의 단일 NightView.exe 자동 교체\n- 업데이트 전 기존 NightView.exe 자동 백업\n- 새 버전 시작 handshake 확인\n- 새 버전 실행 실패 또는 handshake 실패 시 이전 버전 자동 롤백\n- 업데이트 로그 및 백업 관리\n- %LOCALAPPDATA%\\NightView 고정 설치와 시작 메뉴 바로가기\n- 기존 설정 파일 보존\n- NightView 1.2의 이미지 보기·정렬 기능 유지\n- Linux 정적/레이스 검사와 Windows 네이티브 교체·롤백 테스트를 모두 통과한 빌드만 배포",
+  "version": "1.4.0",
+  "published_at": "2026-09-22T07:08:21Z",
+  "notes": "NightView 1.4.0\n- 우클릭 메뉴에 AI 업스케일 2× / 4× 애니·일러스트 기능 추가\n- 최초 사용 시 공식 Real-ESRGAN ncnn Vulkan 엔진 자동 다운로드\n- AI 엔진 ZIP 파일 크기 및 SHA-256 고정 검증\n- ZIP 경로 탈출 및 심볼릭 링크 차단 후 안전하게 설치\n- Real-ESRGAN 실행 파일과 필수 모델 파일 검증\n- AI 작업 중 중복 실행 및 앱 업데이트 동시 실행 차단\n- PNG/JPG/JPEG/JPE/JFIF 입력 지원\n- EXIF 회전/반전이 필요한 JPEG는 현재 AI 업스케일 실행 전 차단\n- 원본 이미지는 수정하지 않고 *_AI_2x.png 또는 *_AI_4x.png로 새 파일 저장\n- 결과 파일이 이미 있으면 번호를 붙여 덮어쓰지 않음\n- 생성된 결과 PNG를 검증한 뒤 NightView에서 자동으로 열기\n- 한글 및 공백이 포함된 파일 경로 지원\n- 기존 NightView 1.3 자동 업데이트, 백업, 실패 롤백 기능 유지",
   "nightview": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.3.0/NightView.exe",
-    "sha256": "3a61e67d54a6f4285687d1860ddac95cc01baff0c1548c32301ba03e0518354b",
-    "size": 6136320
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.4.0/NightView.exe",
+    "sha256": "4212bafa955255209e805c3030a4dd5ddf3399858c76b775ecfbd88572cd8d7b",
+    "size": 6288384
   },
   "updater": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.3.0/NightViewUpdater.exe",
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.4.0/NightViewUpdater.exe",
     "sha256": "73dfe20c37789b1535394635454aaf055ef86ca072026ffa13e67775c8d4a7e0",
     "size": 2114560
   }
