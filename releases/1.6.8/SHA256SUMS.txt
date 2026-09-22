@@ -1,0 +1,3 @@
+21f592125b36130b613d7718a6be97f5fd99641232ac13494d0eee79b8fe9222  releases/1.6.8/NightView.exe
+73dfe20c37789b1535394635454aaf055ef86ca072026ffa13e67775c8d4a7e0  releases/1.6.8/NightViewUpdater.exe
+f63c342d2621ee820add601a1650eee455e1e4ed62e393985ba1ed8a6e31e2ba  releases/1.6.8/NightViewSetup.exe

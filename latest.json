@@ -1,16 +1,16 @@
 {
   "schema": 1,
   "enabled": true,
-  "version": "1.6.7",
-  "published_at": "2026-09-22T15:20:24Z",
-  "notes": "NightView 1.6.7\n- WEBP 이미지 실제 열기/폴더 탐색/해상도 판독 지원 추가\n- JPG/JPEG/JFIF, PNG, GIF, BMP/DIB, TIFF, ICO 기존 지원 유지\n- 이미지 열기 파일 선택창과 지원 형식 안내에 WEBP 반영\n- Windows 탐색기 이미지 확장자의 기존 기본 ProgID를 NightView가 더 이상 강제로 덮어쓰지 않음\n- NightView는 OpenWithProgids 및 RegisteredApplications/Capabilities 방식으로 안전하게 연결 프로그램 등록\n- 1.6.6 이하가 남긴 JPG/PNG 등 NightView.Image 강제 기본 연결값은 1.6.7 첫 실행 시 NightView 값일 때만 제거\n- 기존 Windows 이미지 형식/썸네일 등록을 보존하도록 NightView.Image DefaultIcon 강제 등록 제거\n- 인앱 업데이트 사용자도 재설치 없이 첫 실행 시 파일 연결 구조를 자동 복구\n- 기존 전체화면 상단 툴바, 창 제어, AI 4K 저장 선택/원본 비교, 업데이트/롤백 기능 유지",
+  "version": "1.6.8",
+  "published_at": "2026-09-22T15:41:34Z",
+  "notes": "NightView 1.6.8\n- 확장자와 실제 이미지 형식이 달라도 WEBP 파일 헤더를 직접 판별해 정상 열기\n- .png 또는 .jpg 이름으로 저장된 실제 WEBP 파일도 자동 감지 후 정상 표시\n- 기존 NightView.Image 공용 파일 형식 표시명을 NightView 브랜드명이 아닌 이미지 형식으로 변경\n- 기존 NightView.Image 파일 아이콘을 NightView.exe 아이콘 대신 Windows 이미지 아이콘으로 교체\n- 앞으로 PNG/JPEG/GIF/BMP/TIFF/ICO/WEBP별 개별 ProgID를 등록해 파일 속성에서 실제 형식명이 표시되도록 개선\n- PNG는 Windows 기본 PNG 이미지 아이콘, JPEG는 Windows 기본 JPEG 이미지 아이콘, 나머지는 Windows 이미지 아이콘 사용\n- 1.6.7 사용자는 1.6.8 최초 실행 시 associations-v3 마이그레이션으로 자동 복구\n- Windows의 기존 확장자 기본 ProgID와 썸네일 처리기는 계속 보존\n- 기존 전체화면 툴바, 창 제어, AI 4K 저장 선택/원본 비교, 업데이트/롤백 기능 유지",
   "nightview": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.7/NightView.exe",
-    "sha256": "7b1a1295757a88cf757fbfe3c519bc9345dd381c0e490b45fe14bace16a739f7",
-    "size": 6617088
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.8/NightView.exe",
+    "sha256": "21f592125b36130b613d7718a6be97f5fd99641232ac13494d0eee79b8fe9222",
+    "size": 6621696
   },
   "updater": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.7/NightViewUpdater.exe",
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.8/NightViewUpdater.exe",
     "sha256": "73dfe20c37789b1535394635454aaf055ef86ca072026ffa13e67775c8d4a7e0",
     "size": 2114560
   }
