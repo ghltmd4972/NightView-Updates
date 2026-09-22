@@ -1,0 +1,46 @@
+name: Inspect NightView formats and file associations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-formats-associations.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+      - name: Inspect
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host '=== FILES ==='
+          Get-ChildItem -Recurse -File | Select-Object -ExpandProperty FullName
+          Write-Host '=== FORMAT / DECODE / EXTENSION MATCHES ==='
+          Get-ChildItem -Recurse -File -Include *.go,*.iss,*.ps1,*.json,*.txt | Select-String -Pattern 'JPG|JPEG|PNG|GIF|BMP|TIFF|ICO|WEBP|AVIF|HEIC|HEIF|JXL|extension|exts|supported|image.Decode|RegisterFormat|x/image|decode' -CaseSensitive:$false -Context 3,8 | ForEach-Object {
+            Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
+          Write-Host '=== ASSOCIATION / REGISTRY / THUMBNAIL MATCHES ==='
+          Get-ChildItem -Recurse -File -Include *.go,*.iss,*.ps1,*.reg,*.txt | Select-String -Pattern 'Software\\Classes|HKCR|HKCU|ProgID|OpenWithProgids|RegisteredApplications|Capabilities|FileAssociations|thumbnail|ShellEx|PerceivedType|Content Type|DefaultIcon|assoc|registry|\.jpg|\.jpeg|\.png' -CaseSensitive:$false -Context 4,12 | ForEach-Object {
+            Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
