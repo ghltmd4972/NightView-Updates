@@ -1,0 +1,34 @@
+name: Inspect native Windows image type icons
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-native-icons-1-6-8.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Query registry
+        shell: pwsh
+        run: |
+          $keys = @(
+            'HKLM\SOFTWARE\Classes\.png',
+            'HKLM\SOFTWARE\Classes\.jpg',
+            'HKLM\SOFTWARE\Classes\.jpeg',
+            'HKLM\SOFTWARE\Classes\.webp',
+            'HKLM\SOFTWARE\Classes\pngfile',
+            'HKLM\SOFTWARE\Classes\jpegfile',
+            'HKLM\SOFTWARE\Classes\SystemFileAssociations\image',
+            'HKLM\SOFTWARE\Classes\SystemFileAssociations\.png',
+            'HKLM\SOFTWARE\Classes\SystemFileAssociations\.jpg'
+          )
+          foreach($k in $keys){
+            Write-Host ("===== " + $k + " =====")
+            reg.exe QUERY $k /s 2>&1 | Select-Object -First 80
+          }
