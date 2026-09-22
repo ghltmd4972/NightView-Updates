@@ -1,4 +1,4 @@
-name: Inspect staged NightView source
+name: Inspect staged NightView AI save flow
 
 on:
   push:
@@ -24,21 +24,15 @@ jobs:
           [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-source.tar.gz -C buildsrc
-      - name: Print exact startup and updater files
+      - name: Inspect AI 4K save flow
         shell: pwsh
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host '=== STARTUP RANGE ==='
-          $main = Get-Content main_windows.go
-          for ($i=35; $i -lt [Math]::Min(435,$main.Count); $i++) {
-            if (($i -ge 35 -and $i -le 60) -or ($i -ge 390 -and $i -le 430)) {
-              Write-Host ("{0:D4}: {1}" -f ($i+1), $main[$i])
-            }
+          Write-Host '=== AI/UPSCALE FILES ==='
+          Get-ChildItem -Recurse -Filter *.go | Select-String -Pattern 'upscale|4k|save|writefile|rename|encode|png|jpeg|aiComparison|aiUpscale' -CaseSensitive:$false -Context 12,24 | ForEach-Object {
+            Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
           }
-          Write-Host '=== UPDATECHECK_WINDOWS_GO ==='
-          $u = Get-Content updatecheck_windows.go
-          for ($i=0; $i -lt $u.Count; $i++) { Write-Host ("{0:D4}: {1}" -f ($i+1), $u[$i]) }
-          Write-Host '=== UPDATER_MAIN_GO ==='
-          $p = Get-Content updater/main.go
-          for ($i=0; $i -lt $p.Count; $i++) { Write-Host ("{0:D4}: {1}" -f ($i+1), $p[$i]) }
