@@ -1,4 +1,4 @@
-name: Inspect NightView toolbar fullscreen flow
+name: Inspect NightView toolbar functions
 
 on:
   push:
@@ -24,21 +24,49 @@ jobs:
           [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-source.tar.gz -C buildsrc
-      - name: Inspect toolbar fullscreen mouse flow
+      - name: Print exact relevant functions
         shell: pwsh
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host '=== MAIN WINDOWS RELEVANT ==='
-          Get-Content main_windows.go | Select-String -Pattern 'toolbar|button|CreateWindow|WM_MOUSEMOVE|WM_NCMOUSEMOVE|WM_TIMER|SetTimer|KillTimer|fullscreen|FullScreen|toggleFullscreen|enterFullscreen|exitFullscreen|ShowWindow|MoveWindow|SetWindowPos|clientHeight|toolbarHeight|topBar|controls' -CaseSensitive:$false -Context 18,40 | ForEach-Object {
-            Write-Host ('--- line ' + $_.LineNumber + ' ---')
-            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
-            Write-Host $_.Line
-            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          $lines = Get-Content main_windows.go
+
+          function Print-Function([string]$namePattern) {
+            $start = -1
+            for ($i=0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match $namePattern) { $start = $i; break }
+            }
+            if ($start -lt 0) {
+              Write-Host ("=== NOT FOUND: " + $namePattern + " ===")
+              return
+            }
+            $end = $lines.Count - 1
+            for ($j=$start+1; $j -lt $lines.Count; $j++) {
+              if ($lines[$j] -match '^func ') { $end = $j - 1; break }
+            }
+            Write-Host ("=== " + $namePattern + " lines " + ($start+1) + "-" + ($end+1) + " ===")
+            for ($k=$start; $k -le $end; $k++) {
+              Write-Host ("{0:D4}: {1}" -f ($k+1), $lines[$k])
+            }
           }
-          Write-Host '=== VIEWER APP STRUCT ==='
-          Get-Content main_windows.go | Select-String -Pattern 'type viewerApp struct' -CaseSensitive:$false -Context 0,100 | ForEach-Object {
-            Write-Host ('--- line ' + $_.LineNumber + ' ---')
-            Write-Host $_.Line
-            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+
+          $structStart = -1
+          for ($i=0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^type viewerApp struct') { $structStart = $i; break }
           }
+          if ($structStart -ge 0) {
+            Write-Host ("=== viewerApp struct from line " + ($structStart+1) + " ===")
+            for ($k=$structStart; $k -lt [Math]::Min($lines.Count,$structStart+90); $k++) {
+              Write-Host ("{0:D4}: {1}" -f ($k+1), $lines[$k])
+            }
+          }
+
+          Print-Function '^func wndProc'
+          Print-Function '^func \(a \*viewerApp\) onMouseMove'
+          Print-Function '^func \(a \*viewerApp\) onLeftDown'
+          Print-Function '^func \(a \*viewerApp\) onLeftUp'
+          Print-Function '^func \(a \*viewerApp\) paint'
+          Print-Function '^func \(a \*viewerApp\) toggleFullscreen'
+          Print-Function '^func \(a \*viewerApp\) pointInViewport'
+          Print-Function '^func \(a \*viewerApp\) toolbar'
+          Print-Function '^func \(a \*viewerApp\) viewport'
