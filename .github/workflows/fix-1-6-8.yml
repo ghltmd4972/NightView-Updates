@@ -1,0 +1,164 @@
+name: Fix NightView 1.6.8 disguised WEBP and file types
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-1-6-8.yml
+      - scripts/patch_1_6_8.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-1-6-8-fix
+  cancel-in-progress: true
+
+jobs:
+  patch-build-test-stage:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Reconstruct and verify 1.6.7 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -lt 1) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $expected = ((Get-Content SOURCE_SHA256.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Current source SHA-256 mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -ne '1.6.7') { throw "Expected source version 1.6.7, found $version" }
+
+      - name: Apply 1.6.8 fixes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts\patch_1_6_8.py buildsrc
+
+          if (-not (Test-Path buildsrc\testdata\tiny.webp)) {
+            python -m pip install --disable-pip-version-check --quiet pillow
+            New-Item -ItemType Directory -Force buildsrc\testdata | Out-Null
+            @'
+            from PIL import Image
+            img = Image.new("RGBA", (7, 5), (23, 87, 151, 255))
+            img.save(r"buildsrc\testdata\tiny.webp", format="WEBP", lossless=True)
+            '@ | python -
+          }
+
+          Push-Location buildsrc
+          gofmt -w main_windows.go association_migration_windows.go webp_disguised_windows_test.go installer\association_core.go installer\association_windows.go installer\association_type_windows_test.go
+          Pop-Location
+
+          $main = Get-Content buildsrc\main_windows.go -Raw
+          $assoc = Get-Content buildsrc\installer\association_windows.go -Raw
+          $assocCore = Get-Content buildsrc\installer\association_core.go -Raw
+          $migration = Get-Content buildsrc\association_migration_windows.go -Raw
+
+          foreach ($needle in @('isWebPContent(path)','strings.EqualFold(filepath.Ext(path), ".webp") || isWebPContent(path)','!isSupportedImagePath(path) && !isWebPContent(path)')) {
+            if (-not $main.Contains($needle)) { throw "Missing content-aware WEBP behavior: $needle" }
+          }
+          foreach ($needle in @('NightView.Image.png','PNG 이미지','JPEG 이미지','imageres.dll,-83','imageres.dll,-72','shell32.dll,-16823')) {
+            if (-not (($assoc + $assocCore + $migration).Contains($needle))) { throw "Missing file type metadata behavior: $needle" }
+          }
+          if ($migration.Contains('associations-v2.done')) { throw 'Old association migration marker still present' }
+          if (-not $migration.Contains('associations-v3.done')) { throw 'New association migration marker missing' }
+
+      - name: Build and run full Windows regression suite
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '1.6.8'
+
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=$version" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+
+          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
+          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
+          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
+          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
+          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
+          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+
+          go test -count=1 .\...
+          go vet -unsafeptr=false .\...
+
+      - name: Repack verified 1.6.8 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-1.6.8.tar.gz *
+          Pop-Location
+
+          $hash = (Get-FileHash 'nightview-source-1.6.8.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  nightview-source.tar.gz" | Set-Content 'SOURCE_SHA256.txt' -Encoding ascii
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6_8.txt' -Encoding ascii
+          "1.6.8" | Set-Content 'VERSION' -Encoding ascii
+
+          $notes = @(
+            'NightView 1.6.8',
+            '- 확장자와 실제 이미지 형식이 달라도 WEBP 파일 헤더를 직접 판별해 정상 열기',
+            '- .png 또는 .jpg 이름으로 저장된 실제 WEBP 파일도 자동 감지 후 정상 표시',
+            '- 기존 NightView.Image 공용 파일 형식 표시명을 NightView 브랜드명이 아닌 이미지 형식으로 변경',
+            '- 기존 NightView.Image 파일 아이콘을 NightView.exe 아이콘 대신 Windows 이미지 아이콘으로 교체',
+            '- 앞으로 PNG/JPEG/GIF/BMP/TIFF/ICO/WEBP별 개별 ProgID를 등록해 파일 속성에서 실제 형식명이 표시되도록 개선',
+            '- PNG는 Windows 기본 PNG 이미지 아이콘, JPEG는 Windows 기본 JPEG 이미지 아이콘, 나머지는 Windows 이미지 아이콘 사용',
+            '- 1.6.7 사용자는 1.6.8 최초 실행 시 associations-v3 마이그레이션으로 자동 복구',
+            '- Windows의 기존 확장자 기본 ProgID와 썸네일 처리기는 계속 보존',
+            '- 기존 전체화면 툴바, 창 제어, AI 4K 저장 선택/원본 비교, 업데이트/롤백 기능 유지'
+          ) -join [Environment]::NewLine
+          [IO.File]::WriteAllText((Join-Path $PWD 'RELEASE_NOTES.txt'), $notes + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-1.6.8.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Staged 1.6.8 source SHA-256: $hash"
+          Write-Host "Wrote $index source chunks."
+
+      - name: Commit verified 1.6.8 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current SOURCE_SHA256.txt STAGED_SOURCE_SHA256_1_6_8.txt VERSION RELEASE_NOTES.txt
+          if (git diff --cached --quiet) { throw 'No verified changes were produced.' }
+          git commit -m 'Release NightView 1.6.8 disguised WEBP and file type fixes'
+          git push
