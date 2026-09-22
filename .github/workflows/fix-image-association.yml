@@ -1,0 +1,153 @@
+name: Fix NightView image file association
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-image-association.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-image-association-fix
+  cancel-in-progress: true
+
+jobs:
+  patch-and-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct current staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -lt 1) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $expected = ((Get-Content STAGED_SOURCE_SHA256_1_6.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Current source SHA-256 mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+
+      - name: Apply association fix
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mainPath = 'installer/main_windows.go'
+          $main = Get-Content $mainPath -Raw
+
+          if ($main.Contains('registerFileAssociations(mainPath)')) {
+            throw 'Association registration already exists; refusing duplicate patch.'
+          }
+          if (-not $main.Contains('NightView 1.4.0 설치가 완료되었습니다.')) {
+            throw 'Expected legacy hard-coded installer version text was not found.'
+          }
+
+          $main = $main.Replace(
+            'var (' + [Environment]::NewLine + [char]9 + 'user32      = syscall.NewLazyDLL("user32.dll")',
+            'var installerVersion = "dev"' + [Environment]::NewLine + [Environment]::NewLine + 'var (' + [Environment]::NewLine + [char]9 + 'user32      = syscall.NewLazyDLL("user32.dll")'
+          )
+
+          $old = [char]9 + '_ = createStartMenuShortcut(mainPath)'
+          $new = [char]9 + 'associationErr := registerFileAssociations(mainPath)' + [Environment]::NewLine + [char]9 + '_ = createStartMenuShortcut(mainPath)'
+          if (-not $main.Contains($old)) { throw 'Start Menu anchor not found.' }
+          $main = $main.Replace($old, $new)
+
+          $oldMsg = 'messageBox("NightView 1.4.0 설치가 완료되었습니다.\n\n앞으로 새 버전은 NightView 안에서 확인하고 자동으로 교체·재시작합니다.\n\n설치 위치:\n"+installDir, "NightView Setup", 0x40)'
+          $newMsg = 'if associationErr != nil {' + [Environment]::NewLine +
+            [char]9 + [char]9 + 'messageBox("NightView "+installerVersion+" 설치는 완료됐지만 이미지 파일 연결 등록에 실패했습니다.\n\n"+associationErr.Error()+"\n\n설치 위치:\n"+installDir, "NightView Setup", 0x30)' + [Environment]::NewLine +
+            [char]9 + [char]9 + 'return' + [Environment]::NewLine +
+            [char]9 + '}' + [Environment]::NewLine +
+            [char]9 + 'messageBox("NightView "+installerVersion+" 설치가 완료되었습니다.\n\nJPG, PNG, GIF, BMP, TIFF, ICO 이미지 파일 연결도 NightView로 등록했습니다.\n앞으로 새 버전은 NightView 안에서 확인하고 자동으로 교체·재시작합니다.\n\n설치 위치:\n"+installDir, "NightView Setup", 0x40)'
+          if (-not $main.Contains($oldMsg)) { throw 'Completion message anchor not found.' }
+          $main = $main.Replace($oldMsg, $newMsg)
+
+          [IO.File]::WriteAllText((Join-Path $PWD $mainPath), $main, (New-Object Text.UTF8Encoding($false)))
+          Copy-Item ..\.nightview_patch\association_core.go installer\association_core.go -Force
+          Copy-Item ..\.nightview_patch\association_core_test.go installer\association_core_test.go -Force
+          Copy-Item ..\.nightview_patch\association_windows.go installer\association_windows.go -Force
+          Copy-Item ..\.nightview_patch\association_windows_test.go installer\association_windows_test.go -Force
+
+          gofmt -w installer\main_windows.go installer\association_core.go installer\association_core_test.go installer\association_windows.go installer\association_windows_test.go
+
+          $check = Get-Content installer\main_windows.go -Raw
+          if ($check.Contains('NightView 1.4.0 설치가 완료되었습니다.')) { throw 'Hard-coded 1.4.0 text remains.' }
+          if (-not $check.Contains('registerFileAssociations(mainPath)')) { throw 'Association registration call missing.' }
+          if (-not $check.Contains('installerVersion')) { throw 'Installer version variable missing.' }
+
+      - name: Build and run Windows regression tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.1-dev" -o ..\NightView-1.6.1-dev.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView-1.6.1-dev.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
+
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+          go test -count=1 -v .\installer
+          go test -count=1 .\...
+          go vet -unsafeptr=false .\...
+
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.installerVersion=1.6.1-dev" -o ..\NightViewSetup-1.6.1-dev.exe .\installer
+          foreach ($name in @('NightView-1.6.1-dev.exe','NightViewUpdater.exe','NightViewSetup-1.6.1-dev.exe')) {
+            $p = Join-Path .. $name
+            if ((Get-Item $p).Length -le 0) { throw "$name is empty." }
+            Write-Host "$name SHA-256: $((Get-FileHash $p -Algorithm SHA256).Hash.ToLowerInvariant())"
+          }
+
+      - name: Repack verified patched source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-1.6.1.tar.gz *
+          Pop-Location
+          $hash = (Get-FileHash 'nightview-source-1.6.1.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "NightView 1.6.1 staged source SHA-256: $hash"
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6_1.txt' -Encoding ascii
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-1.6.1.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Wrote $index source chunks."
+
+      - name: Commit verified source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current STAGED_SOURCE_SHA256_1_6_1.txt
+          if (git diff --cached --quiet) { throw 'No staged source changes were produced.' }
+          git commit -m 'Fix image double-click association'
+          git push
