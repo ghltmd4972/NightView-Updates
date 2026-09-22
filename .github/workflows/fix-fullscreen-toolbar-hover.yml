@@ -1,0 +1,503 @@
+name: Add fullscreen top-edge toolbar
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-fullscreen-toolbar-hover.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-fullscreen-toolbar-hover
+  cancel-in-progress: true
+
+jobs:
+  patch-build-test-stage:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct and verify 1.6.4 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -lt 1) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $expected = ((Get-Content SOURCE_SHA256.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Current source SHA-256 mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($version -ne '1.6.4') { throw "Expected source version 1.6.4, found $version" }
+
+      - name: Patch fullscreen toolbar hover behavior
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'main_windows.go'
+          $src = Get-Content $path -Raw
+
+          $oldStruct = @'
+          hoveredButton                     int
+          fullscreen                        bool
+          savedStyle                        uintptr
+'@
+          $newStruct = @'
+          hoveredButton                     int
+          fullscreen                        bool
+          fullscreenToolbarVisible          bool
+          savedStyle                        uintptr
+'@
+          $oldStruct = $oldStruct -replace '(?m)^          ', ''
+          $newStruct = $newStruct -replace '(?m)^          ', ''
+          if (-not $src.Contains($oldStruct)) { throw 'viewerApp fullscreen fields anchor not found.' }
+          $src = $src.Replace($oldStruct, $newStruct)
+
+          $oldToolbarH = @'
+          func (a *viewerApp) toolbarH() int32 {
+          	if a.fullscreen {
+          		return 0
+          	}
+          	return a.dip(46)
+          }
+'@
+          $newToolbarH = @'
+          func (a *viewerApp) toolbarVisualH() int32 {
+          	return a.dip(46)
+          }
+
+          func (a *viewerApp) fullscreenToolbarRevealH() int32 {
+          	return a.dip(4)
+          }
+
+          func (a *viewerApp) toolbarH() int32 {
+          	if a.fullscreen {
+          		return 0
+          	}
+          	return a.toolbarVisualH()
+          }
+
+          func (a *viewerApp) updateFullscreenToolbarVisibility(p POINT) bool {
+          	if !a.fullscreen {
+          		if a.fullscreenToolbarVisible {
+          			a.fullscreenToolbarVisible = false
+          			a.hoveredButton = 0
+          			return true
+          		}
+          		return false
+          	}
+
+          	if !a.fullscreenToolbarVisible {
+          		if p.Y >= 0 && p.Y < a.fullscreenToolbarRevealH() {
+          			a.fullscreenToolbarVisible = true
+          			return true
+          		}
+          		return false
+          	}
+
+          	if p.Y < 0 || p.Y >= a.toolbarVisualH() {
+          		a.fullscreenToolbarVisible = false
+          		a.hoveredButton = 0
+          		return true
+          	}
+          	return false
+          }
+'@
+          $oldToolbarH = $oldToolbarH -replace '(?m)^          ', ''
+          $newToolbarH = $newToolbarH -replace '(?m)^          ', ''
+          if (-not $src.Contains($oldToolbarH)) { throw 'toolbarH function anchor not found.' }
+          $src = $src.Replace($oldToolbarH, $newToolbarH)
+
+          $oldButtonLayout = @'
+          func (a *viewerApp) buttonLayout() []buttonRect {
+          	if a.fullscreen {
+          		return nil
+          	}
+          	h := a.toolbarH()
+'@
+          $newButtonLayout = @'
+          func (a *viewerApp) buttonLayout() []buttonRect {
+          	if a.fullscreen && !a.fullscreenToolbarVisible {
+          		return nil
+          	}
+          	h := a.toolbarVisualH()
+'@
+          $oldButtonLayout = $oldButtonLayout -replace '(?m)^          ', ''
+          $newButtonLayout = $newButtonLayout -replace '(?m)^          ', ''
+          if (-not $src.Contains($oldButtonLayout)) { throw 'buttonLayout anchor not found.' }
+          $src = $src.Replace($oldButtonLayout, $newButtonLayout)
+
+          $oldPaint = @'
+          	if !a.fullscreen {
+          		a.drawToolbar(dc)
+          		a.drawStatus(dc)
+          	}
+'@
+          $newPaint = @'
+          	if !a.fullscreen {
+          		a.drawToolbar(dc)
+          		a.drawStatus(dc)
+          	} else if a.fullscreenToolbarVisible {
+          		a.drawToolbar(dc)
+          	}
+'@
+          $oldPaint = $oldPaint -replace '(?m)^          ', ''
+          $newPaint = $newPaint -replace '(?m)^          ', ''
+          if (-not $src.Contains($oldPaint)) { throw 'paint toolbar block not found.' }
+          $src = $src.Replace($oldPaint, $newPaint)
+
+          $oldDrawHeight = ([char]9) + 'th := a.toolbarH()'
+          $newDrawHeight = ([char]9) + 'th := a.toolbarVisualH()'
+          if (-not $src.Contains($oldDrawHeight)) { throw 'drawToolbar height anchor not found.' }
+          $src = $src.Replace($oldDrawHeight, $newDrawHeight)
+
+          $oldLeftDown = @'
+          func (a *viewerApp) onLeftDown(p POINT) {
+          	if !a.fullscreen {
+          		for _, b := range a.buttonLayout() {
+          			if pointInRect(p, b.rect) {
+          				a.activateButton(b.id)
+          				return
+          			}
+          		}
+          	}
+          	if a.image == nil || !a.pointInViewport(p) {
+          		return
+          	}
+          	if a.onAICompareLeftDown(p) {
+          		return
+          	}
+          	a.panning = true
+          	a.panStart = p
+          	a.panOriginX, a.panOriginY = a.offsetX, a.offsetY
+          	pSetCapture.Call(a.hwnd)
+          	c, _, _ := pLoadCursor.Call(0, IDC_SIZEALL)
+          	pSetCursor.Call(c)
+          }
+'@
+          $newLeftDown = @'
+          func (a *viewerApp) onLeftDown(p POINT) {
+          	if !a.fullscreen || a.fullscreenToolbarVisible {
+          		for _, b := range a.buttonLayout() {
+          			if pointInRect(p, b.rect) {
+          				a.activateButton(b.id)
+          				return
+          			}
+          		}
+          		if a.fullscreen && a.fullscreenToolbarVisible && p.Y >= 0 && p.Y < a.toolbarVisualH() {
+          			return
+          		}
+          	}
+          	if a.image == nil || !a.pointInViewport(p) {
+          		return
+          	}
+          	if a.onAICompareLeftDown(p) {
+          		return
+          	}
+          	a.panning = true
+          	a.panStart = p
+          	a.panOriginX, a.panOriginY = a.offsetX, a.offsetY
+          	pSetCapture.Call(a.hwnd)
+          	c, _, _ := pLoadCursor.Call(0, IDC_SIZEALL)
+          	pSetCursor.Call(c)
+          }
+'@
+          $oldLeftDown = $oldLeftDown -replace '(?m)^          ', ''
+          $newLeftDown = $newLeftDown -replace '(?m)^          ', ''
+          if (-not $src.Contains($oldLeftDown)) { throw 'onLeftDown function anchor not found.' }
+          $src = $src.Replace($oldLeftDown, $newLeftDown)
+
+          $oldMouseMove = @'
+          func (a *viewerApp) onMouseMove(p POINT) {
+          	if a.onAICompareMouseMove(p) {
+          		return
+          	}
+          	if a.panning {
+          		a.offsetX = a.panOriginX + float64(p.X-a.panStart.X)
+          		a.offsetY = a.panOriginY + float64(p.Y-a.panStart.Y)
+          		a.fitMode = FitManual
+          		a.invalidate()
+          		return
+          	}
+          	old := a.hoveredButton
+          	a.hoveredButton = 0
+          	if !a.fullscreen {
+          		for _, b := range a.buttonLayout() {
+          			if pointInRect(p, b.rect) {
+          				a.hoveredButton = b.id
+          				break
+          			}
+          		}
+          	}
+          	if old != a.hoveredButton {
+          		a.invalidate()
+          	}
+          	cid := uintptr(IDC_ARROW)
+          	if a.hoveredButton != 0 {
+          		cid = IDC_HAND
+          	}
+          	c, _, _ := pLoadCursor.Call(0, cid)
+          	pSetCursor.Call(c)
+          }
+'@
+          $newMouseMove = @'
+          func (a *viewerApp) onMouseMove(p POINT) {
+          	toolbarChanged := a.updateFullscreenToolbarVisibility(p)
+          	if toolbarChanged {
+          		a.invalidate()
+          	}
+
+          	toolbarActive := a.fullscreen && a.fullscreenToolbarVisible && !a.panning && p.Y >= 0 && p.Y < a.toolbarVisualH()
+          	if !toolbarActive {
+          		if a.onAICompareMouseMove(p) {
+          			return
+          		}
+          		if a.panning {
+          			a.offsetX = a.panOriginX + float64(p.X-a.panStart.X)
+          			a.offsetY = a.panOriginY + float64(p.Y-a.panStart.Y)
+          			a.fitMode = FitManual
+          			a.invalidate()
+          			return
+          		}
+          	}
+
+          	old := a.hoveredButton
+          	a.hoveredButton = 0
+          	if !a.fullscreen || a.fullscreenToolbarVisible {
+          		for _, b := range a.buttonLayout() {
+          			if pointInRect(p, b.rect) {
+          				a.hoveredButton = b.id
+          				break
+          			}
+          		}
+          	}
+          	if old != a.hoveredButton {
+          		a.invalidate()
+          	}
+          	cid := uintptr(IDC_ARROW)
+          	if a.hoveredButton != 0 {
+          		cid = IDC_HAND
+          	}
+          	c, _, _ := pLoadCursor.Call(0, cid)
+          	pSetCursor.Call(c)
+          }
+'@
+          $oldMouseMove = $oldMouseMove -replace '(?m)^          ', ''
+          $newMouseMove = $newMouseMove -replace '(?m)^          ', ''
+          if (-not $src.Contains($oldMouseMove)) { throw 'onMouseMove function anchor not found.' }
+          $src = $src.Replace($oldMouseMove, $newMouseMove)
+
+          $oldDoubleClick = @'
+          	case WM_LBUTTONDBLCLK:
+          		if p := pointFromLParam(lParam); app.pointInViewport(p) {
+          			app.toggleFullscreen()
+          		}
+          		return 0
+'@
+          $newDoubleClick = @'
+          	case WM_LBUTTONDBLCLK:
+          		p := pointFromLParam(lParam)
+          		inFullscreenToolbar := app.fullscreen && app.fullscreenToolbarVisible && p.Y >= 0 && p.Y < app.toolbarVisualH()
+          		if !inFullscreenToolbar && app.pointInViewport(p) {
+          			app.toggleFullscreen()
+          		}
+          		return 0
+'@
+          $oldDoubleClick = $oldDoubleClick -replace '(?m)^          ', ''
+          $newDoubleClick = $newDoubleClick -replace '(?m)^          ', ''
+          if (-not $src.Contains($oldDoubleClick)) { throw 'fullscreen double-click block not found.' }
+          $src = $src.Replace($oldDoubleClick, $newDoubleClick)
+
+          $togglePattern = '(?ms)(func \(a \*viewerApp\) toggleFullscreen\(\) \{.*?\t\}\r?\n)(\ta\.hoveredButton = 0\r?\n\ta\.onViewportChanged\(\)\r?\n\ta\.invalidate\(\)\r?\n\})'
+          $toggleMatches = [regex]::Matches($src, $togglePattern)
+          if ($toggleMatches.Count -ne 1) { throw "Expected one toggleFullscreen tail, found $($toggleMatches.Count)." }
+          $src = [regex]::Replace($src, $togglePattern, '$1' + ([char]9) + 'a.fullscreenToolbarVisible = false' + [Environment]::NewLine + '$2')
+
+          [IO.File]::WriteAllText((Join-Path $PWD $path), $src, (New-Object Text.UTF8Encoding($false)))
+          gofmt -w main_windows.go
+
+          $check = Get-Content main_windows.go -Raw
+          foreach ($needle in @(
+            'fullscreenToolbarVisible',
+            'fullscreenToolbarRevealH',
+            'updateFullscreenToolbarVisibility',
+            'else if a.fullscreenToolbarVisible',
+            'inFullscreenToolbar :=',
+            'th := a.toolbarVisualH()'
+          )) {
+            if (-not $check.Contains($needle)) { throw "Missing patched behavior: $needle" }
+          }
+
+      - name: Add fullscreen toolbar behavior tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tests = @'
+          //go:build windows
+
+          package main
+
+          import "testing"
+
+          func TestFullscreenToolbarAppearsOnlyAtTopEdgeAndHidesBelowBar(t *testing.T) {
+          	a := viewerApp{dpi: 96, fullscreen: true}
+
+          	if changed := a.updateFullscreenToolbarVisibility(POINT{X: 100, Y: 10}); changed {
+          		t.Fatal("toolbar appeared away from the top-edge reveal zone")
+          	}
+          	if a.fullscreenToolbarVisible {
+          		t.Fatal("toolbar should still be hidden")
+          	}
+
+          	if changed := a.updateFullscreenToolbarVisibility(POINT{X: 100, Y: 0}); !changed {
+          		t.Fatal("top edge did not reveal fullscreen toolbar")
+          	}
+          	if !a.fullscreenToolbarVisible {
+          		t.Fatal("fullscreen toolbar should be visible after touching top edge")
+          	}
+
+          	if changed := a.updateFullscreenToolbarVisibility(POINT{X: 100, Y: 20}); changed {
+          		t.Fatal("toolbar should stay visible while pointer is inside toolbar")
+          	}
+          	if !a.fullscreenToolbarVisible {
+          		t.Fatal("toolbar unexpectedly hid while pointer stayed inside toolbar")
+          	}
+
+          	if changed := a.updateFullscreenToolbarVisibility(POINT{X: 100, Y: a.toolbarVisualH()}); !changed {
+          		t.Fatal("leaving toolbar did not hide it")
+          	}
+          	if a.fullscreenToolbarVisible {
+          		t.Fatal("toolbar should be hidden after pointer leaves toolbar")
+          	}
+          }
+
+          func TestFullscreenToolbarIsOverlayAndButtonsRemainInteractive(t *testing.T) {
+          	a := viewerApp{dpi: 96, fullscreen: true, fullscreenToolbarVisible: true}
+
+          	if got := a.toolbarH(); got != 0 {
+          		t.Fatalf("fullscreen toolbar must not shrink viewport, toolbarH=%d", got)
+          	}
+          	if got := a.toolbarVisualH(); got != 46 {
+          		t.Fatalf("unexpected toolbar visual height: %d", got)
+          	}
+          	buttons := a.buttonLayout()
+          	if len(buttons) == 0 {
+          		t.Fatal("visible fullscreen toolbar has no interactive buttons")
+          	}
+          	for _, b := range buttons {
+          		if b.rect.Top < 0 || b.rect.Bottom > a.toolbarVisualH() {
+          			t.Fatalf("button outside fullscreen toolbar: %+v", b.rect)
+          		}
+          	}
+
+          	a.fullscreenToolbarVisible = false
+          	if buttons := a.buttonLayout(); buttons != nil {
+          		t.Fatalf("hidden fullscreen toolbar should not expose buttons: %d", len(buttons))
+          	}
+          }
+
+          func TestFullscreenToolbarVisibilityResetsOutsideFullscreen(t *testing.T) {
+          	a := viewerApp{dpi: 96, fullscreen: false, fullscreenToolbarVisible: true, hoveredButton: btnOpen}
+          	if changed := a.updateFullscreenToolbarVisibility(POINT{X: 0, Y: 0}); !changed {
+          		t.Fatal("leaving fullscreen should clear toolbar overlay state")
+          	}
+          	if a.fullscreenToolbarVisible || a.hoveredButton != 0 {
+          		t.Fatal("fullscreen toolbar state was not cleared")
+          	}
+          }
+'@
+          $tests = $tests -replace '(?m)^          ', ''
+          [IO.File]::WriteAllText((Join-Path $PWD 'fullscreen_toolbar_windows_test.go'), $tests, (New-Object Text.UTF8Encoding($false)))
+          gofmt -w fullscreen_toolbar_windows_test.go
+
+      - name: Build and run full regression suite
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '1.6.5'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=$version" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+
+          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
+          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
+          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
+          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
+          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
+          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+
+          go test -count=1 .\...
+          go vet -unsafeptr=false .\...
+
+      - name: Repack verified 1.6.5 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-1.6.5.tar.gz *
+          Pop-Location
+
+          $hash = (Get-FileHash 'nightview-source-1.6.5.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  nightview-source.tar.gz" | Set-Content 'SOURCE_SHA256.txt' -Encoding ascii
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6_5.txt' -Encoding ascii
+          "1.6.5" | Set-Content 'VERSION' -Encoding ascii
+
+          $notes = @(
+            'NightView 1.6.5',
+            '- 전체화면에서는 상단 툴바를 기본적으로 숨김',
+            '- 마우스를 화면 최상단에 가져가면 기존 열기/폴더/이전/다음/맞춤/폭/높이/100%/전체화면 툴바가 자동 표시',
+            '- 마우스가 툴바 아래로 벗어나면 툴바를 다시 자동 숨김',
+            '- 전체화면 툴바는 이미지 위에 오버레이되어 이미지 표시 영역과 확대/위치가 변하지 않음',
+            '- 표시된 전체화면 툴바의 버튼은 기존과 동일하게 클릭 가능',
+            '- NightView 1.6.4 AI 4K 저장 선택 기능 및 기존 업데이트/롤백 동작 유지'
+          ) -join [Environment]::NewLine
+          [IO.File]::WriteAllText((Join-Path $PWD 'RELEASE_NOTES.txt'), $notes + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-1.6.5.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Staged 1.6.5 source SHA-256: $hash"
+          Write-Host "Wrote $index source chunks."
+
+      - name: Commit verified 1.6.5 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current SOURCE_SHA256.txt STAGED_SOURCE_SHA256_1_6_5.txt VERSION RELEASE_NOTES.txt
+          if (git diff --cached --quiet) { throw 'No verified changes were produced.' }
+          git commit -m 'Release NightView 1.6.5 fullscreen top-edge toolbar'
+          git push
