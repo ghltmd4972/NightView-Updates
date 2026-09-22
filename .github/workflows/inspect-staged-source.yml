@@ -1,4 +1,4 @@
-name: Inspect staged NightView AI save implementation
+name: Inspect NightView toolbar fullscreen flow
 
 on:
   push:
@@ -24,24 +24,21 @@ jobs:
           [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-source.tar.gz -C buildsrc
-      - name: Print AI save implementation
+      - name: Inspect toolbar fullscreen mouse flow
         shell: pwsh
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host '=== AI_WINDOWS_GO ==='
-          Get-Content ai_windows.go | ForEach-Object { Write-Host $_ }
-          Write-Host '=== AI_CORE_GO RELEVANT ==='
-          Get-Content ai_core.go | Select-String -Pattern 'nextAIOutputPath|commitAI|copyFile|replace|save|output' -CaseSensitive:$false -Context 12,30 | ForEach-Object {
+          Write-Host '=== MAIN WINDOWS RELEVANT ==='
+          Get-Content main_windows.go | Select-String -Pattern 'toolbar|button|CreateWindow|WM_MOUSEMOVE|WM_NCMOUSEMOVE|WM_TIMER|SetTimer|KillTimer|fullscreen|FullScreen|toggleFullscreen|enterFullscreen|exitFullscreen|ShowWindow|MoveWindow|SetWindowPos|clientHeight|toolbarHeight|topBar|controls' -CaseSensitive:$false -Context 18,40 | ForEach-Object {
             Write-Host ('--- line ' + $_.LineNumber + ' ---')
             $_.Context.PreContext | ForEach-Object { Write-Host $_ }
             Write-Host $_.Line
             $_.Context.PostContext | ForEach-Object { Write-Host $_ }
           }
-          Write-Host '=== WINDOWS DIALOG SUPPORT ==='
-          Get-ChildItem -Filter '*.go' | Select-String -Pattern 'GetSaveFileName|OPENFILENAME|SaveFile|choose.*save|save.*dialog|MessageBox|MB_YESNOCANCEL|MB_YESNO' -CaseSensitive:$false -Context 6,14 | ForEach-Object {
-            Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
-            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+          Write-Host '=== VIEWER APP STRUCT ==='
+          Get-Content main_windows.go | Select-String -Pattern 'type viewerApp struct' -CaseSensitive:$false -Context 0,100 | ForEach-Object {
+            Write-Host ('--- line ' + $_.LineNumber + ' ---')
             Write-Host $_.Line
             $_.Context.PostContext | ForEach-Object { Write-Host $_ }
           }
