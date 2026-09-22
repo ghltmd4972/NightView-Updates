@@ -1,4 +1,5 @@
 name: Verify NightView 1.5 comparison integration
+# Re-run against cleaned fixed-width staged source
 
 on:
   push:
