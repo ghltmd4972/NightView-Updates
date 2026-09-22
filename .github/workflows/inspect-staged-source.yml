@@ -1,4 +1,4 @@
-name: Inspect NightView window controls and AI compare
+name: Inspect NightView 1.6.5 window controls and AI comparison
 
 on:
   push:
@@ -24,85 +24,60 @@ jobs:
           [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-source.tar.gz -C buildsrc
-
-      - name: Print window control and AI compare source
+      - name: Inspect exact relevant source
         shell: pwsh
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host "VERSION=$(Get-Content ..\VERSION -Raw)"
+          $lines = Get-Content main_windows.go
 
-          $files = Get-ChildItem -Recurse -File -Include '*.go' | Sort-Object FullName
-          foreach ($f in $files) {
-            $rel = Resolve-Path -Relative $f.FullName
-            $lines = Get-Content $f.FullName
-
-            Write-Host ("=== FILE " + $rel + " ===")
-            $patterns = @(
-              '^func main',
-              '^func run',
-              '^func .*create.*window',
-              '^func .*init.*window',
-              '^func \(a \*viewerApp\) buttonLayout',
-              '^func \(a \*viewerApp\) drawToolbar',
-              '^func \(a \*viewerApp\) activateButton',
-              '^func \(a \*viewerApp\) toggleFullscreen',
-              '^func \(a \*viewerApp\) onAI',
-              '^func \(a \*viewerApp\) drawAI',
-              '^func \(a \*viewerApp\) startAI',
-              '^func \(a \*viewerApp\) endAI',
-              '^func \(a \*viewerApp\) .*Upscale',
-              '^type viewerApp struct',
-              '^type ai',
-              '^type AI'
-            )
-
-            for ($i=0; $i -lt $lines.Count; $i++) {
-              $matched = $false
-              foreach ($p in $patterns) {
-                if ($lines[$i] -match $p) { $matched = $true; break }
-              }
-              if (-not $matched) { continue }
-
-              $start = [Math]::Max(0, $i)
-              $end = [Math]::Min($lines.Count-1, $i + 160)
-              if ($lines[$i] -match '^func ') {
-                for ($j=$i+1; $j -lt $lines.Count; $j++) {
-                  if ($lines[$j] -match '^func ' -or $lines[$j] -match '^type ') {
-                    $end = $j - 1
-                    break
-                  }
-                }
-              }
-
-              Write-Host ("--- " + $rel + " line " + ($i+1) + " ---")
-              for ($k=$start; $k -le $end; $k++) {
-                Write-Host ("{0:D4}: {1}" -f ($k+1), $lines[$k])
-              }
-            }
-
-            $needles = @(
-              'CreateWindowEx',
-              'WS_OVERLAPPEDWINDOW',
-              'WS_POPUP',
-              'SW_MINIMIZE',
-              'SC_MINIMIZE',
-              'ShowWindow',
-              'btnFullscreen',
-              'btnAI',
-              'compare',
-              'original',
-              'upscale',
-              'AI 4K',
-              'ai4k'
-            )
-            foreach ($needle in $needles) {
-              $matches = Select-String -Path $f.FullName -Pattern $needle -SimpleMatch -Context 8,16
-              foreach ($m in $matches) {
-                Write-Host ("--- MATCH " + $needle + " " + $rel + " line " + $m.LineNumber + " ---")
-                $m.Context.PreContext | ForEach-Object { Write-Host $_ }
-                Write-Host $m.Line
-                $m.Context.PostContext | ForEach-Object { Write-Host $_ }
-              }
+          function Print-Matches([string]$pattern, [int]$before=8, [int]$after=30) {
+            Get-Content main_windows.go | Select-String -Pattern $pattern -CaseSensitive:$false -Context $before,$after | ForEach-Object {
+              Write-Host ('--- line ' + $_.LineNumber + ' [' + $pattern + '] ---')
+              $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+              Write-Host $_.Line
+              $_.Context.PostContext | ForEach-Object { Write-Host $_ }
             }
           }
+
+          function Print-Function([string]$namePattern) {
+            $start = -1
+            for ($i=0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match $namePattern) { $start = $i; break }
+            }
+            if ($start -lt 0) {
+              Write-Host ("=== NOT FOUND: " + $namePattern + " ===")
+              return
+            }
+            $end = $lines.Count - 1
+            for ($j=$start+1; $j -lt $lines.Count; $j++) {
+              if ($lines[$j] -match '^func ') { $end = $j - 1; break }
+            }
+            Write-Host ("=== " + $namePattern + " lines " + ($start+1) + "-" + ($end+1) + " ===")
+            for ($k=$start; $k -le $end; $k++) {
+              Write-Host ("{0:D4}: {1}" -f ($k+1), $lines[$k])
+            }
+          }
+
+          Write-Host '=== WINDOW CONTROL CONSTANTS / APIS ==='
+          Print-Matches 'SC_MINIMIZE|SC_MAXIMIZE|SC_RESTORE|SC_CLOSE|WM_SYSCOMMAND|SW_MINIMIZE|SW_MAXIMIZE|SW_RESTORE|PostMessage|ShowWindow|DestroyWindow|btn[A-Za-z]+' 8 25
+
+          Write-Host '=== BUTTON / TOOLBAR FUNCTIONS ==='
+          Print-Function '^func \(a \*viewerApp\) buttonLayout'
+          Print-Function '^func \(a \*viewerApp\) drawToolbar'
+          Print-Function '^func \(a \*viewerApp\) activateButton'
+          Print-Function '^func \(a \*viewerApp\) onLeftDown'
+          Print-Function '^func \(a \*viewerApp\) onMouseMove'
+          Print-Function '^func \(a \*viewerApp\) toggleFullscreen'
+
+          Write-Host '=== AI COMPARISON FUNCTIONS ==='
+          Print-Matches 'AICompare|AIComparison|comparison|compare|원본|비교|upscale|AI 4K|aiUpscale' 12 45
+          Print-Function '^func \(a \*viewerApp\) beginAIComparison'
+          Print-Function '^func \(a \*viewerApp\) endAIComparison'
+          Print-Function '^func \(a \*viewerApp\) drawAIComparison'
+          Print-Function '^func \(a \*viewerApp\) onAICompareMouseMove'
+          Print-Function '^func \(a \*viewerApp\) onAICompareLeftDown'
+          Print-Function '^func \(a \*viewerApp\) onAICompareLeftUp'
+          Print-Function '^func \(a \*viewerApp\) onAIUpscaleDone'
+          Print-Function '^func \(a \*viewerApp\) startAIUpscale'
+          Print-Function '^func \(a \*viewerApp\) runAIUpscale'
