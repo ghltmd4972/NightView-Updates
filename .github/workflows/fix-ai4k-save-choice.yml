@@ -81,8 +81,10 @@ jobs:
           		}
           	}
           '@
-          if (-not $src.Contains($oldCache)) { throw 'AI cache commit block not found.' }
-          $src = $src.Replace($oldCache, $newCache)
+          $cachePattern = '(?ms)^\tif cached, ok := findValidAICache\(localData, input, sourceSHA, scale, m\); ok \{\r?\n\t\tfinalPath, copyErr := commitAICachedOutput\(cached, input, scale\)\r?\n\t\tif copyErr == nil \{\r?\n\t\t\ta\.finishAIUpscale\(finalPath, sourceSHA, true, nil\)\r?\n\t\t\treturn\r?\n\t\t\}\r?\n\t\}\r?\n'
+          $cacheMatches = [regex]::Matches($src, $cachePattern)
+          if ($cacheMatches.Count -ne 1) { throw "Expected exactly one AI cache commit block, found $($cacheMatches.Count)." }
+          $src = [regex]::Replace($src, $cachePattern, $newCache)
 
           $oldCommit = @'
           	finalPath, err := commitAIOutput(tmpOutput, input, scale)
@@ -110,8 +112,10 @@ jobs:
           	}
           	a.finishAIUpscale(finalPath, sourceSHA, false, nil)
           '@
-          if (-not $src.Contains($oldCommit)) { throw 'AI final commit block not found.' }
-          $src = $src.Replace($oldCommit, $newCommit)
+          $commitPattern = '(?ms)^\tfinalPath, err := commitAIOutput\(tmpOutput, input, scale\)\r?\n\tif err != nil \{\r?\n\t\ta\.finishAIUpscale\("", sourceSHA, false, fmt\.Errorf\("AI 결과 저장 실패: %w", err\)\)\r?\n\t\treturn\r?\n\t\}\r?\n\ta\.finishAIUpscale\(finalPath, sourceSHA, false, nil\)\r?\n'
+          $commitMatches = [regex]::Matches($src, $commitPattern)
+          if ($commitMatches.Count -ne 1) { throw "Expected exactly one AI final commit block, found $($commitMatches.Count)." }
+          $src = [regex]::Replace($src, $commitPattern, $newCommit)
 
           $pattern = '(?ms)^func \(a \*viewerApp\) onAIUpscaleDone\(\) \{.*?^\}\r?\n(?=func \(a \*viewerApp\) onAIUpscaleError\(\))'
           $matches = [regex]::Matches($src, $pattern)
