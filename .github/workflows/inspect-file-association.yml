@@ -1,0 +1,47 @@
+name: Inspect NightView file association bug
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/inspect-file-association.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'stage.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf stage.tar.gz -C buildsrc
+
+      - name: Inspect installer association and startup argument code
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host '=== installer files ==='
+          Get-ChildItem .\installer -Recurse -File | ForEach-Object { $_.FullName }
+
+          Write-Host '=== installer registry / association matches ==='
+          Get-ChildItem .\installer -Recurse -File -Filter '*.go' |
+            Select-String -Pattern 'assoc|association|registry|RegSet|Classes|shell|open|command|NightViewSetup|NightView\.exe|jpg|jpeg|png|gif|bmp|tif|ico|version|1\.4\.0' -Context 5,10 |
+            ForEach-Object { $_.ToString() }
+
+          Write-Host '=== app argv startup matches ==='
+          Get-ChildItem . -File -Filter '*.go' |
+            Select-String -Pattern 'os\.Args|Args|commandLine|currentPath|openPath|load|startup|argv' -Context 5,10 |
+            Select-Object -First 260 |
+            ForEach-Object { $_.ToString() }
