@@ -1,0 +1,28 @@
+name: Inspect NightView 1.6.7 core tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-core-test-1-6-7.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat source/current/chunk_*.b64 > source.b64
+          base64 -d source.b64 > source.tar.gz
+          mkdir buildsrc
+          tar -xzf source.tar.gz -C buildsrc
+      - name: Print core test
+        shell: bash
+        run: |
+          sed -n '1,180p' buildsrc/core_test.go
