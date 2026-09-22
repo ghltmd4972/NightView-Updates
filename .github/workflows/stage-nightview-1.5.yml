@@ -1,0 +1,1057 @@
+name: Stage NightView 1.5 comparison and cache
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/stage-nightview-1.5.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-stage-1-5
+  cancel-in-progress: true
+
+jobs:
+  stage:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct current 1.4 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $hash = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '94f3eef2e00a514d65df846b1b0937bea8c119c2b53611b3e8f753092ba054c3') {
+            throw "Unexpected base source SHA-256: $hash"
+          }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+
+      - name: Apply comparison and AI cache implementation
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if s.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one patch target, found {s.count(old)}')
+              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          replace_once('main_windows.go',
+          '''\t\tcancelAIUpscale()
+          \t\tr, _, _ := pDefWindowProc.Call(hwnd, uintptr(msg), wParam, lParam)''',
+          '''\t\tcancelAIUpscale()
+          \t\tapp.endAIComparison()
+          \t\tr, _, _ := pDefWindowProc.Call(hwnd, uintptr(msg), wParam, lParam)''')
+
+          old_paint = '''\tif a.image != nil {
+          \t\tsaved, _, _ := pSaveDC.Call(dc)
+          \t\tpIntersectClipRect.Call(dc, uptr32(vr.Left), uptr32(vr.Top), uptr32(vr.Right), uptr32(vr.Bottom))
+          \t\tvar g uintptr
+          \t\tif st, _, _ := pGdipCreateFromHDC.Call(dc, uintptr(unsafe.Pointer(&g))); st == 0 && g != 0 {
+          \t\t\tpGdipSetInterpolationMode.Call(g, InterpolationModeHighQualityBicubic)
+          \t\t\tpGdipSetPixelOffsetMode.Call(g, PixelOffsetModeHighQuality)
+          \t\t\tdx := int32(math.Round(a.offsetX))
+          \t\t\tdy := vr.Top + int32(math.Round(a.offsetY))
+          \t\t\tdw := int32(math.Max(1, math.Round(float64(a.image.width)*a.scale)))
+          \t\t\tdh := int32(math.Max(1, math.Round(float64(a.image.height)*a.scale)))
+          \t\t\tpGdipDrawImageRectI.Call(g, a.image.handle, uptr32(dx), uptr32(dy), uintptr(dw), uintptr(dh))
+          \t\t\tpGdipDeleteGraphics.Call(g)
+          \t\t}
+          \t\tif saved != 0 {
+          \t\t\tpRestoreDC.Call(dc, saved)
+          \t\t}
+          \t} else if !a.loading {'''
+          new_paint = '''\tif a.image != nil {
+          \t\tif !a.drawAIComparison(dc, vr) {
+          \t\t\tsaved, _, _ := pSaveDC.Call(dc)
+          \t\t\tpIntersectClipRect.Call(dc, uptr32(vr.Left), uptr32(vr.Top), uptr32(vr.Right), uptr32(vr.Bottom))
+          \t\t\tvar g uintptr
+          \t\t\tif st, _, _ := pGdipCreateFromHDC.Call(dc, uintptr(unsafe.Pointer(&g))); st == 0 && g != 0 {
+          \t\t\t\tpGdipSetInterpolationMode.Call(g, InterpolationModeHighQualityBicubic)
+          \t\t\t\tpGdipSetPixelOffsetMode.Call(g, PixelOffsetModeHighQuality)
+          \t\t\t\tdx := int32(math.Round(a.offsetX))
+          \t\t\t\tdy := vr.Top + int32(math.Round(a.offsetY))
+          \t\t\t\tdw := int32(math.Max(1, math.Round(float64(a.image.width)*a.scale)))
+          \t\t\t\tdh := int32(math.Max(1, math.Round(float64(a.image.height)*a.scale)))
+          \t\t\t\tpGdipDrawImageRectI.Call(g, a.image.handle, uptr32(dx), uptr32(dy), uintptr(dw), uintptr(dh))
+          \t\t\t\tpGdipDeleteGraphics.Call(g)
+          \t\t\t}
+          \t\t\tif saved != 0 {
+          \t\t\t\tpRestoreDC.Call(dc, saved)
+          \t\t\t}
+          \t\t}
+          \t} else if !a.loading {'''
+          replace_once('main_windows.go', old_paint, new_paint)
+
+          replace_once('main_windows.go',
+          '''\t\tif a.image.frameCount > 1 {
+          \t\t\trt += fmt.Sprintf("    GIF %d/%d", a.image.frameIndex+1, a.image.frameCount)
+          \t\t}
+          \t}''',
+          '''\t\tif a.image.frameCount > 1 {
+          \t\t\trt += fmt.Sprintf("    GIF %d/%d", a.image.frameIndex+1, a.image.frameCount)
+          \t\t}
+          \t\tif a.aiComparisonActive() {
+          \t\t\trt += fmt.Sprintf("    비교 %.0f%%", a.aiComparisonSplit()*100)
+          \t\t}
+          \t}''')
+
+          replace_once('main_windows.go',
+          '''\tif a.image == nil || !a.pointInViewport(p) {
+          \t\treturn
+          \t}
+          \ta.panning = true''',
+          '''\tif a.image == nil || !a.pointInViewport(p) {
+          \t\treturn
+          \t}
+          \tif a.onAICompareLeftDown(p) {
+          \t\treturn
+          \t}
+          \ta.panning = true''')
+
+          replace_once('main_windows.go',
+          '''func (a *viewerApp) onLeftUp(_ POINT) {
+          \tif !a.panning {''',
+          '''func (a *viewerApp) onLeftUp(p POINT) {
+          \tif a.onAICompareLeftUp(p) {
+          \t\treturn
+          \t}
+          \tif !a.panning {''')
+
+          replace_once('main_windows.go',
+          '''func (a *viewerApp) onMouseMove(p POINT) {
+          \tif a.panning {''',
+          '''func (a *viewerApp) onMouseMove(p POINT) {
+          \tif a.onAICompareMouseMove(p) {
+          \t\treturn
+          \t}
+          \tif a.panning {''')
+
+          replace_once('main_windows.go',
+          '''\t\treturn
+          \t}
+          \tswitch vk {''',
+          '''\t\treturn
+          \t}
+          \tif vk == 'C' {
+          \t\ta.toggleAIComparison()
+          \t\treturn
+          \t}
+          \tswitch vk {''')
+
+          replace_once('main_windows.go',
+          '''\tcase VK_ESCAPE:
+          \t\tif a.fullscreen {''',
+          '''\tcase VK_ESCAPE:
+          \t\tif a.aiComparisonActive() {
+          \t\t\ta.endAIComparison()
+          \t\t\treturn
+          \t\t}
+          \t\tif a.fullscreen {''')
+
+          replace_once('main_windows.go',
+          '''\t\tappendMenu(aiMenu, aiFlags, cmdAIUpscale2X, "2×  애니/일러스트")
+          \t\tappendMenu(aiMenu, aiFlags, cmdAIUpscale4X, "4×  애니/일러스트")
+          \t\tlabel := mustUTF16("AI 업스케일")''',
+          '''\t\tappendMenu(aiMenu, aiFlags, cmdAIUpscale2X, "2×  애니/일러스트")
+          \t\tappendMenu(aiMenu, aiFlags, cmdAIUpscale4X, "4×  애니/일러스트")
+          \t\tpAppendMenu.Call(aiMenu, MF_SEPARATOR, 0, 0)
+          \t\tcompareFlags := uintptr(MF_STRING)
+          \t\tif a.aiComparisonActive() {
+          \t\t\tcompareFlags |= MF_CHECKED
+          \t\t} else if !a.canStartAIComparison() {
+          \t\t\tcompareFlags |= MF_GRAYED
+          \t\t}
+          \t\tappendMenu(aiMenu, compareFlags, cmdAICompare, "원본 ↔ AI 결과 비교    C")
+          \t\tlabel := mustUTF16("AI 업스케일")''')
+
+          replace_once('main_windows.go',
+          '''\tcase cmdAIUpscale4X:
+          \t\ta.startAIUpscale(4)
+          \tcase cmdWheelNav:''',
+          '''\tcase cmdAIUpscale4X:
+          \t\ta.startAIUpscale(4)
+          \tcase cmdAICompare:
+          \t\ta.toggleAIComparison()
+          \tcase cmdWheelNav:''')
+
+          replace_once('main_windows.go',
+          '''func (a *viewerApp) loadPath(path string) {
+          \ta.generation++''',
+          '''func (a *viewerApp) loadPath(path string) {
+          \tif a.aiComparisonActive() {
+          \t\ta.endAIComparison()
+          \t}
+          \ta.generation++''')
+
+          p = Path('ai_windows.go')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+          '''\tresultPath string
+          \terrText    string
+          \tcancel     context.CancelFunc''',
+          '''\tresultPath string
+          \tinputSHA   string
+          \tcacheHit   bool
+          \terrText    string
+          \tcancel     context.CancelFunc''', 1)
+
+          s = s.replace(
+          '''\taiUpscales.resultPath = ""
+          \taiUpscales.errText = ""''',
+          '''\taiUpscales.resultPath = ""
+          \taiUpscales.inputSHA = ""
+          \taiUpscales.cacheHit = false
+          \taiUpscales.errText = ""''', 1)
+
+          start = s.index('func (a *viewerApp) runAIUpscaleJob(')
+          end = s.index('\nfunc runAIEngineProcess(', start)
+          new_run = r'''func (a *viewerApp) runAIUpscaleJob(ctx context.Context, input string, scale int) {
+          \tclient := newUpdateHTTPClient()
+          \tm, err := fetchAIEngineManifest(ctx, client, aiManifestURL)
+          \tif err != nil {
+          \t\ta.finishAIUpscale("", "", false, fmt.Errorf("AI 엔진 정보를 확인하지 못했습니다: %w", err))
+          \t\treturn
+          \t}
+          \tlocalData, err := nightViewLocalDataDir()
+          \tif err != nil {
+          \t\ta.finishAIUpscale("", "", false, fmt.Errorf("NightView 로컬 데이터 폴더를 찾지 못했습니다: %w", err))
+          \t\treturn
+          \t}
+          \tsourceSHA, _, err := fileSHA256(input)
+          \tif err != nil {
+          \t\ta.finishAIUpscale("", "", false, fmt.Errorf("원본 이미지 무결성 확인 실패: %w", err))
+          \t\treturn
+          \t}
+
+          \tif cached, ok := findValidAICache(localData, input, sourceSHA, scale, m); ok {
+          \t\tfinalPath, copyErr := commitAICachedOutput(cached, input, scale)
+          \t\tif copyErr == nil {
+          \t\t\ta.finishAIUpscale(finalPath, sourceSHA, true, nil)
+          \t\t\treturn
+          \t\t}
+          \t}
+
+          \tinst, err := ensureAIEngine(ctx, client, localData, m, validateAMD64PEExecutable)
+          \tif err != nil {
+          \t\ta.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 엔진 준비 실패: %w", err))
+          \t\treturn
+          \t}
+
+          \ttmpFile, err := os.CreateTemp(filepath.Dir(input), ".nightview-ai-*.png")
+          \tif err != nil {
+          \t\ta.finishAIUpscale("", sourceSHA, false, fmt.Errorf("결과 파일을 만들 수 없습니다: %w", err))
+          \t\treturn
+          \t}
+          \ttmpOutput := tmpFile.Name()
+          \tif err := tmpFile.Close(); err != nil {
+          \t\t_ = os.Remove(tmpOutput)
+          \t\ta.finishAIUpscale("", sourceSHA, false, fmt.Errorf("임시 결과 파일을 준비하지 못했습니다: %w", err))
+          \t\treturn
+          \t}
+          \tif err := os.Remove(tmpOutput); err != nil && !errors.Is(err, os.ErrNotExist) {
+          \t\ta.finishAIUpscale("", sourceSHA, false, fmt.Errorf("임시 결과 파일을 준비하지 못했습니다: %w", err))
+          \t\treturn
+          \t}
+          \tdefer os.Remove(tmpOutput)
+
+          \targs, err := buildAIEngineArgs(inst, input, tmpOutput, scale)
+          \tif err != nil {
+          \t\ta.finishAIUpscale("", sourceSHA, false, err)
+          \t\treturn
+          \t}
+          \tif err := runAIEngineProcess(ctx, inst, args); err != nil {
+          \t\ta.finishAIUpscale("", sourceSHA, false, err)
+          \t\treturn
+          \t}
+          \tif err := validateAIUpscaleOutput(tmpOutput); err != nil {
+          \t\ta.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 결과 검증 실패: %w", err))
+          \t\treturn
+          \t}
+          \tif err := validateAIUpscaleDimensions(input, tmpOutput, scale); err != nil {
+          \t\ta.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 결과 해상도 검증 실패: %w", err))
+          \t\treturn
+          \t}
+          \tafterSHA, _, err := fileSHA256(input)
+          \tif err != nil || afterSHA != sourceSHA {
+          \t\ta.finishAIUpscale("", sourceSHA, false, errors.New("AI 처리 중 원본 이미지가 변경되어 결과 저장을 중단했습니다"))
+          \t\treturn
+          \t}
+          \t_ = storeAICache(localData, input, sourceSHA, scale, m, tmpOutput)
+          \tcleanupAICache(localData)
+
+          \tfinalPath, err := commitAIOutput(tmpOutput, input, scale)
+          \tif err != nil {
+          \t\ta.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 결과 저장 실패: %w", err))
+          \t\treturn
+          \t}
+          \ta.finishAIUpscale(finalPath, sourceSHA, false, nil)
+          }'''
+          s = s[:start] + new_run + s[end:]
+
+          old_finish_start = s.index('func (a *viewerApp) finishAIUpscale(')
+          old_finish_end = s.index('\nfunc (a *viewerApp) onAIUpscaleDone()', old_finish_start)
+          new_finish = r'''func (a *viewerApp) finishAIUpscale(result, inputSHA string, cacheHit bool, err error) {
+          \taiUpscales.mu.Lock()
+          \taiUpscales.working = false
+          \taiUpscales.cancel = nil
+          \taiUpscales.inputSHA = inputSHA
+          \taiUpscales.cacheHit = cacheHit
+          \tif err != nil {
+          \t\taiUpscales.errText = err.Error()
+          \t\taiUpscales.resultPath = ""
+          \t} else {
+          \t\taiUpscales.errText = ""
+          \t\taiUpscales.resultPath = result
+          \t}
+          \taiUpscales.mu.Unlock()
+          \tif a.closing.Load() {
+          \t\treturn
+          \t}
+          \tif err != nil {
+          \t\tpPostMessage.Call(a.hwnd, WM_AI_UPSCALE_ERROR, 0, 0)
+          \t} else {
+          \t\tpPostMessage.Call(a.hwnd, WM_AI_UPSCALE_DONE, 0, 0)
+          \t}
+          }'''
+          s = s[:old_finish_start] + new_finish + s[old_finish_end:]
+
+          old_done_start = s.index('func (a *viewerApp) onAIUpscaleDone()')
+          old_done_end = s.index('\nfunc (a *viewerApp) onAIUpscaleError()', old_done_start)
+          new_done = r'''func (a *viewerApp) onAIUpscaleDone() {
+          \taiUpscales.mu.Lock()
+          \tresult := aiUpscales.resultPath
+          \tinput := aiUpscales.inputPath
+          \tinputSHA := aiUpscales.inputSHA
+          \tscale := aiUpscales.scale
+          \tcacheHit := aiUpscales.cacheHit
+          \taiUpscales.mu.Unlock()
+          \tif result == "" {
+          \t\ta.onAIUpscaleErrorText("AI 결과 파일 경로가 비어 있습니다.")
+          \t\treturn
+          \t}
+          \ta.setAICompareCandidate(input, result, scale, inputSHA)
+          \ta.openImagePath(result)
+          \tcacheNote := ""
+          \tif cacheHit {
+          \t\tcacheNote = "\n\n같은 원본/배율의 검증된 캐시를 사용해 AI를 다시 실행하지 않았습니다."
+          \t}
+          \tmessageBox(a.hwnd, fmt.Sprintf("AI %d× 업스케일이 완료되었습니다.\n\n%s\n\n원본 파일은 변경하지 않았습니다.%s\n\nC 키로 원본과 AI 결과를 비교할 수 있습니다.", scale, result, cacheNote), "NightView AI 업스케일", MB_OK|MB_ICONINFO)
+          }'''
+          s = s[:old_done_start] + new_done + s[old_done_end:]
+          p.write_text(s, encoding='utf-8')
+
+          Path('comparison_core.go').write_text(r'''package main
+
+          func clampCompareSplit(v float64) float64 {
+          \tif v < 0.02 {
+          \t\treturn 0.02
+          \t}
+          \tif v > 0.98 {
+          \t\treturn 0.98
+          \t}
+          \treturn v
+          }
+
+          func compareSplitX(left, right int32, ratio float64) int32 {
+          \tif right <= left {
+          \t\treturn left
+          \t}
+          \tratio = clampCompareSplit(ratio)
+          \treturn left + int32(float64(right-left)*ratio+0.5)
+          }
+
+          func compareDimensionsValid(originalW, originalH, resultW, resultH uint32, scale int) bool {
+          \tif originalW == 0 || originalH == 0 || resultW == 0 || resultH == 0 {
+          \t\treturn false
+          \t}
+          \tif scale != 2 && scale != 4 {
+          \t\treturn false
+          \t}
+          \treturn uint64(originalW)*uint64(scale) == uint64(resultW) &&
+          \t\tuint64(originalH)*uint64(scale) == uint64(resultH)
+          }
+          ''', encoding='utf-8')
+
+          Path('comparison_core_test.go').write_text(r'''package main
+
+          import "testing"
+
+          func TestCompareSplitClamp(t *testing.T) {
+          \tif got := clampCompareSplit(-1); got != 0.02 {
+          \t\tt.Fatalf("low clamp=%v", got)
+          \t}
+          \tif got := clampCompareSplit(2); got != 0.98 {
+          \t\tt.Fatalf("high clamp=%v", got)
+          \t}
+          \tif got := compareSplitX(10, 110, 0.5); got != 60 {
+          \t\tt.Fatalf("split=%d", got)
+          \t}
+          }
+
+          func TestCompareDimensionRelation(t *testing.T) {
+          \tif !compareDimensionsValid(100, 50, 200, 100, 2) {
+          \t\tt.Fatal("valid 2x relation rejected")
+          \t}
+          \tif !compareDimensionsValid(100, 50, 400, 200, 4) {
+          \t\tt.Fatal("valid 4x relation rejected")
+          \t}
+          \tif compareDimensionsValid(100, 50, 201, 100, 2) {
+          \t\tt.Fatal("invalid relation accepted")
+          \t}
+          }
+          ''', encoding='utf-8')
+
+          Path('ai_cache.go').write_text(r'''package main
+
+          import (
+          \t"crypto/sha256"
+          \t"encoding/hex"
+          \t"errors"
+          \t"fmt"
+          \t"image"
+          \t_ "image/jpeg"
+          \t_ "image/png"
+          \t"io"
+          \t"os"
+          \t"path/filepath"
+          \t"sort"
+          \t"strings"
+          \t"time"
+          )
+
+          const (
+          \taiCacheMaxBytes   int64 = 2 << 30
+          \taiCacheMaxEntries       = 256
+          )
+
+          func fileSHA256(path string) (string, int64, error) {
+          \tf, err := os.Open(path)
+          \tif err != nil {
+          \t\treturn "", 0, err
+          \t}
+          \tdefer f.Close()
+          \th := sha256.New()
+          \tn, err := io.Copy(h, f)
+          \tif err != nil {
+          \t\treturn "", 0, err
+          \t}
+          \treturn hex.EncodeToString(h.Sum(nil)), n, nil
+          }
+
+          func aiCacheKey(sourceSHA string, scale int, m aiEngineManifest) (string, error) {
+          \tmodel, err := aiModelForScale(m, scale)
+          \tif err != nil {
+          \t\treturn "", err
+          \t}
+          \tif len(strings.TrimSpace(sourceSHA)) != 64 {
+          \t\treturn "", errors.New("invalid source SHA-256")
+          \t}
+          \tseed := strings.Join([]string{
+          \t\t"nightview-ai-cache-v1", sourceSHA, fmt.Sprint(scale),
+          \t\tm.Engine, m.PackageVersion, m.SHA256, model,
+          \t}, "|")
+          \ts := sha256.Sum256([]byte(seed))
+          \treturn hex.EncodeToString(s[:]), nil
+          }
+
+          func aiCacheDir(localData string) string {
+          \treturn filepath.Join(localData, "ai-cache", "v1")
+          }
+
+          func aiCachePath(localData, input, sourceSHA string, scale int, m aiEngineManifest) (string, error) {
+          \tkey, err := aiCacheKey(sourceSHA, scale, m)
+          \tif err != nil {
+          \t\treturn "", err
+          \t}
+          \treturn filepath.Join(aiCacheDir(localData), key+".png"), nil
+          }
+
+          func imageConfig(path string) (image.Config, string, error) {
+          \tf, err := os.Open(path)
+          \tif err != nil {
+          \t\treturn image.Config{}, "", err
+          \t}
+          \tdefer f.Close()
+          \treturn image.DecodeConfig(f)
+          }
+
+          func validateAIUpscaleDimensions(input, output string, scale int) error {
+          \tinCfg, _, err := imageConfig(input)
+          \tif err != nil {
+          \t\treturn fmt.Errorf("read input dimensions: %w", err)
+          \t}
+          \toutCfg, format, err := imageConfig(output)
+          \tif err != nil {
+          \t\treturn fmt.Errorf("read output dimensions: %w", err)
+          \t}
+          \tif format != "png" {
+          \t\treturn errors.New("AI output is not PNG")
+          \t}
+          \tif !compareDimensionsValid(uint32(inCfg.Width), uint32(inCfg.Height), uint32(outCfg.Width), uint32(outCfg.Height), scale) {
+          \t\treturn fmt.Errorf("unexpected output dimensions: input=%dx%d output=%dx%d scale=%dx", inCfg.Width, inCfg.Height, outCfg.Width, outCfg.Height, scale)
+          \t}
+          \treturn nil
+          }
+
+          func findValidAICache(localData, input, sourceSHA string, scale int, m aiEngineManifest) (string, bool) {
+          \tp, err := aiCachePath(localData, input, sourceSHA, scale, m)
+          \tif err != nil {
+          \t\treturn "", false
+          \t}
+          \tif err := validateAIUpscaleOutput(p); err != nil {
+          \t\tif !errors.Is(err, os.ErrNotExist) {
+          \t\t\t_ = os.Remove(p)
+          \t\t}
+          \t\treturn "", false
+          \t}
+          \tif err := validateAIUpscaleDimensions(input, p, scale); err != nil {
+          \t\t_ = os.Remove(p)
+          \t\treturn "", false
+          \t}
+          \tnow := time.Now()
+          \t_ = os.Chtimes(p, now, now)
+          \treturn p, true
+          }
+
+          func copyFileExclusive(src, dst string) error {
+          \tin, err := os.Open(src)
+          \tif err != nil {
+          \t\treturn err
+          \t}
+          \tdefer in.Close()
+          \tout, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+          \tif err != nil {
+          \t\treturn err
+          \t}
+          \tok := false
+          \tdefer func() {
+          \t\t_ = out.Close()
+          \t\tif !ok {
+          \t\t\t_ = os.Remove(dst)
+          \t\t}
+          \t}()
+          \tif _, err := io.Copy(out, in); err != nil {
+          \t\treturn err
+          \t}
+          \tif err := out.Sync(); err != nil {
+          \t\treturn err
+          \t}
+          \tif err := out.Close(); err != nil {
+          \t\treturn err
+          \t}
+          \tok = true
+          \treturn nil
+          }
+
+          func commitAICachedOutput(cached, input string, scale int) (string, error) {
+          \tfor i := 0; i < 10000; i++ {
+          \t\tcandidate := nextAIOutputPath(input, scale)
+          \t\terr := copyFileExclusive(cached, candidate)
+          \t\tif err == nil {
+          \t\t\treturn candidate, nil
+          \t\t}
+          \t\tif errors.Is(err, os.ErrExist) {
+          \t\t\tcontinue
+          \t\t}
+          \t\treturn "", err
+          \t}
+          \treturn "", errors.New("사용 가능한 결과 파일 이름을 찾지 못했습니다")
+          }
+
+          func storeAICache(localData, input, sourceSHA string, scale int, m aiEngineManifest, output string) error {
+          \tdst, err := aiCachePath(localData, input, sourceSHA, scale, m)
+          \tif err != nil {
+          \t\treturn err
+          \t}
+          \tif err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+          \t\treturn err
+          \t}
+          \tif _, err := os.Stat(dst); err == nil {
+          \t\treturn nil
+          \t}
+          \ttmp := dst + ".tmp"
+          \t_ = os.Remove(tmp)
+          \tif err := copyFileExclusive(output, tmp); err != nil {
+          \t\treturn err
+          \t}
+          \tif err := validateAIUpscaleDimensions(input, tmp, scale); err != nil {
+          \t\t_ = os.Remove(tmp)
+          \t\treturn err
+          \t}
+          \tif err := os.Rename(tmp, dst); err != nil {
+          \t\t_ = os.Remove(tmp)
+          \t\tif _, statErr := os.Stat(dst); statErr == nil {
+          \t\t\treturn nil
+          \t\t}
+          \t\treturn err
+          \t}
+          \treturn nil
+          }
+
+          type aiCacheEntry struct {
+          \tpath string
+          \tsize int64
+          \tused time.Time
+          }
+
+          func cleanupAICache(localData string) {
+          \tentries, err := os.ReadDir(aiCacheDir(localData))
+          \tif err != nil {
+          \t\treturn
+          \t}
+          \titems := make([]aiCacheEntry, 0, len(entries))
+          \tvar total int64
+          \tfor _, e := range entries {
+          \t\tif e.IsDir() || strings.ToLower(filepath.Ext(e.Name())) != ".png" {
+          \t\t\tcontinue
+          \t\t}
+          \t\tinfo, err := e.Info()
+          \t\tif err != nil {
+          \t\t\tcontinue
+          \t\t}
+          \t\tp := filepath.Join(aiCacheDir(localData), e.Name())
+          \t\titems = append(items, aiCacheEntry{p, info.Size(), info.ModTime()})
+          \t\ttotal += info.Size()
+          \t}
+          \tsort.Slice(items, func(i, j int) bool { return items[i].used.Before(items[j].used) })
+          \tfor len(items) > aiCacheMaxEntries || total > aiCacheMaxBytes {
+          \t\te := items[0]
+          \t\titems = items[1:]
+          \t\tif os.Remove(e.path) == nil {
+          \t\t\ttotal -= e.size
+          \t\t}
+          \t}
+          }
+          ''', encoding='utf-8')
+
+          Path('ai_cache_test.go').write_text(r'''package main
+
+          import (
+          \t"image"
+          \t"image/color"
+          \t"image/png"
+          \t"os"
+          \t"path/filepath"
+          \t"testing"
+          )
+
+          func writeTestPNG(t *testing.T, path string, w, h int, c color.Color) {
+          \tt.Helper()
+          \tim := image.NewRGBA(image.Rect(0, 0, w, h))
+          \tfor y := 0; y < h; y++ {
+          \t\tfor x := 0; x < w; x++ {
+          \t\t\tim.Set(x, y, c)
+          \t\t}
+          \t}
+          \tf, err := os.Create(path)
+          \tif err != nil { t.Fatal(err) }
+          \tif err := png.Encode(f, im); err != nil { _ = f.Close(); t.Fatal(err) }
+          \tif err := f.Close(); err != nil { t.Fatal(err) }
+          }
+
+          func testAIManifest() aiEngineManifest {
+          \treturn aiEngineManifest{
+          \t\tSchema: 1, Enabled: true, Engine: aiPinnedEngineName,
+          \t\tPackageVersion: aiPinnedPackageVersion, UpstreamRelease: aiPinnedRelease,
+          \t\tSHA256: "abc02804e17982a3be33675e4d471e91ea374e65b70167abc09e31acb412802d",
+          \t\tModels: map[string]string{"anime_2x":"realesr-animevideov3","anime_4x":"realesrgan-x4plus-anime"},
+          \t}
+          }
+
+          func TestAICacheKeyChangesByScale(t *testing.T) {
+          \tm := testAIManifest()
+          \ta, err := aiCacheKey("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 2, m)
+          \tif err != nil { t.Fatal(err) }
+          \tb, err := aiCacheKey("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 4, m)
+          \tif err != nil { t.Fatal(err) }
+          \tif a == b { t.Fatal("2x and 4x cache keys must differ") }
+          }
+
+          func TestAICacheValidatesDimensionsAndCopiesWithoutOverwrite(t *testing.T) {
+          \td := t.TempDir()
+          \tin := filepath.Join(d, "원본 image.png")
+          \tout := filepath.Join(d, "up.png")
+          \twriteTestPNG(t, in, 5, 3, color.RGBA{R:255,A:255})
+          \twriteTestPNG(t, out, 10, 6, color.RGBA{B:255,A:255})
+          \tif err := validateAIUpscaleDimensions(in, out, 2); err != nil { t.Fatal(err) }
+          \tsha, _, err := fileSHA256(in)
+          \tif err != nil { t.Fatal(err) }
+          \tm := testAIManifest()
+          \tif err := storeAICache(d, in, sha, 2, m, out); err != nil { t.Fatal(err) }
+          \tcached, ok := findValidAICache(d, in, sha, 2, m)
+          \tif !ok { t.Fatal("expected cache hit") }
+          \tfirst, err := commitAICachedOutput(cached, in, 2)
+          \tif err != nil { t.Fatal(err) }
+          \tsecond, err := commitAICachedOutput(cached, in, 2)
+          \tif err != nil { t.Fatal(err) }
+          \tif first == second { t.Fatal("cache result overwrote existing output") }
+          }
+          ''', encoding='utf-8')
+
+          Path('comparison_windows.go').write_text(r'''//go:build windows
+
+          package main
+
+          import (
+          \t"errors"
+          \t"fmt"
+          \t"math"
+          \t"os"
+          \t"path/filepath"
+          \t"strings"
+          \t"syscall"
+          \t"unsafe"
+          )
+
+          const (
+          \tcmdAICompare = 1062
+          \tIDC_SIZEWE   = 32644
+          )
+
+          type aiCompareCandidate struct {
+          \toriginalPath string
+          \tresultPath   string
+          \toriginalSHA  string
+          \tscale        int
+          }
+
+          type aiCompareState struct {
+          \tcandidate aiCompareCandidate
+          \tactive    bool
+          \toriginal  *imageAsset
+          \tsplit     float64
+          \tdragging  bool
+          }
+
+          var aiCompare aiCompareState
+
+          func sameWindowsPath(a, b string) bool {
+          \tif a == "" || b == "" { return false }
+          \treturn strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+          }
+
+          func (a *viewerApp) setAICompareCandidate(original, result string, scale int, originalSHA string) {
+          \tif scale != 2 && scale != 4 { return }
+          \taiCompare.candidate = aiCompareCandidate{
+          \t\toriginalPath: filepath.Clean(original),
+          \t\tresultPath: filepath.Clean(result),
+          \t\toriginalSHA: strings.ToLower(strings.TrimSpace(originalSHA)),
+          \t\tscale: scale,
+          \t}
+          }
+
+          func (a *viewerApp) aiComparisonActive() bool { return aiCompare.active }
+          func (a *viewerApp) aiComparisonSplit() float64 {
+          \tif !aiCompare.active { return 0 }
+          \treturn aiCompare.split
+          }
+
+          func (a *viewerApp) canStartAIComparison() bool {
+          \tif aiCompare.active { return true }
+          \tc := aiCompare.candidate
+          \tif a.image == nil || a.loading || c.originalPath == "" || c.resultPath == "" { return false }
+          \tif !sameWindowsPath(a.currentPath, c.resultPath) { return false }
+          \tif c.scale != 2 && c.scale != 4 { return false }
+          \tif len(c.originalSHA) != 64 { return false }
+          \tif st, err := os.Stat(c.originalPath); err != nil || !st.Mode().IsRegular() { return false }
+          \treturn true
+          }
+
+          func (a *viewerApp) toggleAIComparison() {
+          \tif aiCompare.active {
+          \t\ta.endAIComparison()
+          \t\treturn
+          \t}
+          \tif err := a.startAIComparison(); err != nil {
+          \t\tmessageBox(a.hwnd, "원본과 AI 결과를 비교할 수 없습니다.\n\n"+err.Error(), "NightView AI 비교", MB_OK|MB_ICONERROR)
+          \t}
+          }
+
+          func (a *viewerApp) startAIComparison() error {
+          \tif !a.canStartAIComparison() {
+          \t\treturn errors.New("현재 이미지에 연결된 AI 원본 정보가 없습니다")
+          \t}
+          \tc := aiCompare.candidate
+          \thash, _, err := fileSHA256(c.originalPath)
+          \tif err != nil { return fmt.Errorf("원본 파일 확인 실패: %w", err) }
+          \tif !strings.EqualFold(hash, c.originalSHA) {
+          \t\treturn errors.New("AI 처리 후 원본 파일 내용이 변경되었습니다")
+          \t}
+          \toriginal, err := loadImageAsset(c.originalPath)
+          \tif err != nil { return fmt.Errorf("원본 이미지 열기 실패: %w", err) }
+          \tif a.image == nil || !compareDimensionsValid(original.width, original.height, a.image.width, a.image.height, c.scale) {
+          \t\toriginal.dispose()
+          \t\treturn errors.New("원본과 AI 결과의 해상도 관계가 올바르지 않습니다")
+          \t}
+          \taiCompare.original = original
+          \taiCompare.active = true
+          \taiCompare.split = 0.5
+          \taiCompare.dragging = false
+          \ta.invalidate()
+          \treturn nil
+          }
+
+          func (a *viewerApp) endAIComparison() {
+          \tif aiCompare.dragging {
+          \t\tpReleaseCapture.Call()
+          \t}
+          \taiCompare.dragging = false
+          \taiCompare.active = false
+          \tif aiCompare.original != nil {
+          \t\taiCompare.original.dispose()
+          \t\taiCompare.original = nil
+          \t}
+          \ta.invalidate()
+          }
+
+          func drawGDIImageClipped(dc uintptr, clip RECT, asset *imageAsset, dx, dy, dw, dh int32) bool {
+          \tif asset == nil || asset.handle == 0 || clip.Right <= clip.Left || clip.Bottom <= clip.Top { return false }
+          \tsaved, _, _ := pSaveDC.Call(dc)
+          \tif saved == 0 { return false }
+          \tdefer pRestoreDC.Call(dc, saved)
+          \tpIntersectClipRect.Call(dc, uptr32(clip.Left), uptr32(clip.Top), uptr32(clip.Right), uptr32(clip.Bottom))
+          \tvar g uintptr
+          \tif st, _, _ := pGdipCreateFromHDC.Call(dc, uintptr(unsafe.Pointer(&g))); st != 0 || g == 0 { return false }
+          \tdefer pGdipDeleteGraphics.Call(g)
+          \tpGdipSetInterpolationMode.Call(g, InterpolationModeHighQualityBicubic)
+          \tpGdipSetPixelOffsetMode.Call(g, PixelOffsetModeHighQuality)
+          \tst, _, _ := pGdipDrawImageRectI.Call(g, asset.handle, uptr32(dx), uptr32(dy), uintptr(dw), uintptr(dh))
+          \treturn st == 0
+          }
+
+          func drawComparisonImages(dc uintptr, vr RECT, original, result *imageAsset, dx, dy, dw, dh, splitX int32) bool {
+          \tif original == nil || result == nil || splitX <= vr.Left || splitX >= vr.Right { return false }
+          \tif !drawGDIImageClipped(dc, vr, result, dx, dy, dw, dh) { return false }
+          \tleft := vr
+          \tleft.Right = splitX
+          \treturn drawGDIImageClipped(dc, left, original, dx, dy, dw, dh)
+          }
+
+          func (a *viewerApp) drawAIComparison(dc uintptr, vr RECT) bool {
+          \tif !aiCompare.active || aiCompare.original == nil || a.image == nil { return false }
+          \tif !sameWindowsPath(a.currentPath, aiCompare.candidate.resultPath) {
+          \t\ta.endAIComparison()
+          \t\treturn false
+          \t}
+          \tdx := int32(math.Round(a.offsetX))
+          \tdy := vr.Top + int32(math.Round(a.offsetY))
+          \tdw := int32(math.Max(1, math.Round(float64(a.image.width)*a.scale)))
+          \tdh := int32(math.Max(1, math.Round(float64(a.image.height)*a.scale)))
+          \tsplitX := compareSplitX(vr.Left, vr.Right, aiCompare.split)
+          \tif !drawComparisonImages(dc, vr, aiCompare.original, a.image, dx, dy, dw, dh, splitX) { return false }
+          \tdrawLine(dc, splitX, vr.Top, splitX, vr.Bottom, rgb(235, 235, 235))
+          \tlabelH := a.dip(28)
+          \tleftLabel := RECT{vr.Left + a.dip(10), vr.Top + a.dip(8), splitX - a.dip(8), vr.Top + a.dip(8) + labelH}
+          \trightLabel := RECT{splitX + a.dip(8), vr.Top + a.dip(8), vr.Right - a.dip(10), vr.Top + a.dip(8) + labelH}
+          \tdrawText(dc, "원본", leftLabel, a.fontSmall, rgb(245,245,245), DT_VCENTER|DT_SINGLELINE)
+          \tdrawText(dc, "AI", rightLabel, a.fontSmall, rgb(245,245,245), DT_RIGHT|DT_VCENTER|DT_SINGLELINE)
+          \treturn true
+          }
+
+          func (a *viewerApp) compareDividerNear(p POINT) bool {
+          \tif !aiCompare.active || !a.pointInViewport(p) { return false }
+          \tvr := a.viewportRect()
+          \tx := compareSplitX(vr.Left, vr.Right, aiCompare.split)
+          \td := p.X - x
+          \tif d < 0 { d = -d }
+          \treturn d <= a.dip(8)
+          }
+
+          func (a *viewerApp) setCompareCursor() {
+          \tc, _, _ := pLoadCursor.Call(0, IDC_SIZEWE)
+          \tpSetCursor.Call(c)
+          }
+
+          func (a *viewerApp) onAICompareLeftDown(p POINT) bool {
+          \tif !a.compareDividerNear(p) { return false }
+          \taiCompare.dragging = true
+          \tpSetCapture.Call(a.hwnd)
+          \ta.setCompareCursor()
+          \treturn true
+          }
+
+          func (a *viewerApp) onAICompareLeftUp(_ POINT) bool {
+          \tif !aiCompare.dragging { return false }
+          \taiCompare.dragging = false
+          \tpReleaseCapture.Call()
+          \ta.setCompareCursor()
+          \treturn true
+          }
+
+          func (a *viewerApp) onAICompareMouseMove(p POINT) bool {
+          \tif !aiCompare.active { return false }
+          \tvr := a.viewportRect()
+          \tif aiCompare.dragging {
+          \t\tw := vr.Right - vr.Left
+          \t\tif w > 0 {
+          \t\t\taiCompare.split = clampCompareSplit(float64(p.X-vr.Left) / float64(w))
+          \t\t\ta.invalidate()
+          \t\t}
+          \t\ta.setCompareCursor()
+          \t\treturn true
+          \t}
+          \tif a.compareDividerNear(p) {
+          \t\ta.setCompareCursor()
+          \t\treturn true
+          \t}
+          \treturn false
+          }
+
+          var _ = syscall.Errno(0)
+          ''', encoding='utf-8')
+
+          Path('comparison_windows_test.go').write_text(r'''//go:build windows
+
+          package main
+
+          import (
+          \t"image/color"
+          \t"path/filepath"
+          \t"syscall"
+          \t"testing"
+          \t"unsafe"
+          )
+
+          type gdipStartupInputTest struct {
+          \tVersion uint32
+          \tDebug uintptr
+          \tSuppressBackground int32
+          \tSuppressCodecs int32
+          }
+
+          func TestAICompareNativeSplitRendering(t *testing.T) {
+          \td := t.TempDir()
+          \torigPath := filepath.Join(d, "원본 빨강.png")
+          \tresultPath := filepath.Join(d, "결과 파랑.png")
+          \twriteTestPNG(t, origPath, 8, 8, color.RGBA{R:255,A:255})
+          \twriteTestPNG(t, resultPath, 16, 16, color.RGBA{B:255,A:255})
+
+          \tvar token uintptr
+          \tin := gdipStartupInputTest{Version:1}
+          \tst, _, _ := pGdiplusStartup.Call(uintptr(unsafe.Pointer(&token)), uintptr(unsafe.Pointer(&in)), 0)
+          \tif st != 0 || token == 0 { t.Fatalf("GdiplusStartup status=%d", st) }
+          \tdefer pGdiplusShutdown.Call(token)
+
+          \torig, err := loadImageAsset(origPath)
+          \tif err != nil { t.Fatal(err) }
+          \tdefer orig.dispose()
+          \tresult, err := loadImageAsset(resultPath)
+          \tif err != nil { t.Fatal(err) }
+          \tdefer result.dispose()
+          \tif !compareDimensionsValid(orig.width, orig.height, result.width, result.height, 2) {
+          \t\tt.Fatal("native image dimensions are not 2x")
+          \t}
+
+          \tuser32 := syscall.NewLazyDLL("user32.dll")
+          \tgetDC := user32.NewProc("GetDC")
+          \treleaseDC := user32.NewProc("ReleaseDC")
+          \tgdi32 := syscall.NewLazyDLL("gdi32.dll")
+          \tgetPixel := gdi32.NewProc("GetPixel")
+
+          \tscreen, _, _ := getDC.Call(0)
+          \tif screen == 0 { t.Fatal("GetDC failed") }
+          \tdefer releaseDC.Call(0, screen)
+          \tmem, _, _ := pCreateCompatibleDC.Call(screen)
+          \tif mem == 0 { t.Fatal("CreateCompatibleDC failed") }
+          \tdefer pDeleteDC.Call(mem)
+          \tbmp, _, _ := pCreateCompatibleBitmap.Call(screen, 64, 32)
+          \tif bmp == 0 { t.Fatal("CreateCompatibleBitmap failed") }
+          \tdefer pDeleteObject.Call(bmp)
+          \told, _, _ := pSelectObject.Call(mem, bmp)
+          \tdefer pSelectObject.Call(mem, old)
+
+          \tvr := RECT{0,0,64,32}
+          \tfillRect(mem, vr, rgb(0,0,0))
+          \tif !drawComparisonImages(mem, vr, orig, result, 0, 0, 64, 32, 32) {
+          \t\tt.Fatal("native split rendering failed")
+          \t}
+          \tleft, _, _ := getPixel.Call(mem, 16, 16)
+          \tright, _, _ := getPixel.Call(mem, 48, 16)
+          \tif uint32(left) != uint32(rgb(255,0,0)) {
+          \t\tt.Fatalf("left pixel=%#x want red=%#x", left, rgb(255,0,0))
+          \t}
+          \tif uint32(right) != uint32(rgb(0,0,255)) {
+          \t\tt.Fatalf("right pixel=%#x want blue=%#x", right, rgb(0,0,255))
+          \t}
+          }
+          ''', encoding='utf-8')
+          '@ | python
+          if ($LASTEXITCODE -ne 0) { throw 'Source patch failed.' }
+          gofmt -w .\*.go
+
+      - name: Build fixtures and run Windows tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.5.0" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+          go test -count=1 -v -run 'TestCompare|TestAICompare|TestAICache' .
+          if ($LASTEXITCODE -ne 0) { throw 'Comparison/cache tests failed.' }
+          go test -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Windows regression suite failed.' }
+          go vet -unsafeptr=false ./...
+          if ($LASTEXITCODE -ne 0) { throw 'go vet failed.' }
+
+      - name: Repack verified staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          tar -czf nightview-source-1.5.tar.gz -C buildsrc .
+          $hash = (Get-FileHash nightview-source-1.5.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -eq '94f3eef2e00a514d65df846b1b0937bea8c119c2b53611b3e8f753092ba054c3') {
+            throw 'Patched source hash unexpectedly equals NightView 1.4 source.'
+          }
+          $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path 'nightview-source-1.5.tar.gz')))
+          Remove-Item source/current/chunk_*.b64 -Force
+          $chunkSize = 8000
+          $count = [Math]::Ceiling($b64.Length / $chunkSize)
+          for ($i = 0; $i -lt $count; $i++) {
+            $start = $i * $chunkSize
+            $len = [Math]::Min($chunkSize, $b64.Length - $start)
+            $part = $b64.Substring($start, $len)
+            $name = ('source/current/chunk_{0:D2}.b64' -f $i)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, [Text.Encoding]::ASCII)
+          }
+          "$hash  nightview-source.tar.gz" | Set-Content STAGED_SOURCE_SHA256_1_5.txt -Encoding ascii
+          Write-Host "STAGED_1_5_SHA256=$hash"
+          Write-Host "STAGED_CHUNKS=$count"
+
+      - name: Commit verified staged source only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A source/current STAGED_SOURCE_SHA256_1_5.txt
+          if (git diff --cached --quiet) { throw 'No staged source changes were produced.' }
+          git commit -m 'Stage verified NightView 1.5 comparison and cache source'
+          git push
