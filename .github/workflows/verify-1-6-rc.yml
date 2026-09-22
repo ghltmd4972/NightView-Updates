@@ -1,0 +1,140 @@
+name: Verify NightView 1.6 release candidate
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/verify-1-6-rc.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightview-1-6-rc
+  cancel-in-progress: true
+
+jobs:
+  linux-verify:
+    runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -buildvcs=false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct exact staged source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat source/current/chunk_*.b64 > stage.b64
+          base64 -d stage.b64 > nightview-source.tar.gz
+          expected="$(awk '{print $1}' STAGED_SOURCE_SHA256_1_6.txt)"
+          actual="$(sha256sum nightview-source.tar.gz | awk '{print $1}')"
+          test "$actual" = "$expected"
+          mkdir buildsrc
+          tar -xzf nightview-source.tar.gz -C buildsrc
+          echo "staged source sha256: $actual"
+
+      - name: Static race and regression verification
+        shell: bash
+        working-directory: buildsrc
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l $(find . -name '*.go' -type f))"
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted Go files:"
+            echo "$unformatted"
+            exit 1
+          fi
+          go test -count=1 ./...
+          go test -race -count=1 ./...
+          go vet -unsafeptr=false ./...
+
+  windows-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct exact staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -lt 1) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $expected = ((Get-Content STAGED_SOURCE_SHA256_1_6.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Staged source SHA-256 mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+          Write-Host "staged source sha256: $actual"
+
+      - name: Build exact Windows 1.6 release candidate and fixtures
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.0" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
+
+      - name: Run native Windows integration regression suite
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
+          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
+          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
+          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
+          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
+          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+
+          go test -count=1 -v -run 'TestCompare|TestAICompare|TestAICache|TestAccumulateCompareWheel|TestStepCompareSplit' .
+          go test -count=1 ./...
+          go vet -unsafeptr=false ./...
+
+      - name: Build setup and verify release artifacts
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewSetup.exe .\installer
+          foreach ($name in @('NightView.exe','NightViewUpdater.exe','NightViewSetup.exe')) {
+            $path = Join-Path .. $name
+            if ((Get-Item $path).Length -le 0) { throw "$name is empty" }
+            $hash = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Host "$name SHA-256: $hash"
+          }
+
+      - name: Upload verified 1.6 release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: NightView-1.6.0-release-candidate
+          retention-days: 5
+          if-no-files-found: error
+          path: |
+            NightView.exe
+            NightViewUpdater.exe
+            NightViewSetup.exe
