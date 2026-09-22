@@ -1000,7 +1000,7 @@ jobs:
           ''', encoding='utf-8')
           '@ | python
           if ($LASTEXITCODE -ne 0) { throw 'Source patch failed.' }
-          gofmt -w .\*.go
+          Get-ChildItem . -File -Filter '*.go' | ForEach-Object { gofmt -w $_.FullName }
 
       - name: Build fixtures and run Windows tests
         shell: pwsh
