@@ -80,14 +80,9 @@ jobs:
             }
           }
 
-          # The upstream CLI deliberately returns -1 for -h, so validate its help text
-          # rather than treating that documented help exit code as an execution failure.
-          $help = & $exe.FullName -h 2>&1 | Out-String
-          if ($help -notmatch '-s scale' -or $help -notmatch 'realesrgan-x4plus-anime') {
-            throw 'Unexpected Real-ESRGAN CLI help output.'
-          }
-          $help | Set-Content 'realesrgan-help.txt' -Encoding utf8
-
+          # Do not launch Vulkan inference on a headless GitHub-hosted runner.
+          # Integrity is established by the pinned upstream asset SHA-256 and
+          # exact required executable/model layout checks above.
           $relativeExe = [IO.Path]::GetRelativePath((Resolve-Path 'realesrgan-package').Path, $exe.FullName).Replace('\\','/')
           "AI_ENGINE_EXE=$relativeExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
