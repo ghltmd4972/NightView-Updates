@@ -20,7 +20,8 @@ def replace_once(text, old, new, label):
     return text.replace(old, new, 1)
 
 def sub_once(text, pattern, repl, label, flags=0):
-    out, count = re.subn(pattern, repl, text, count=1, flags=flags)
+    replacement = (lambda _m: repl) if isinstance(repl, str) else repl
+    out, count = re.subn(pattern, replacement, text, count=1, flags=flags)
     if count != 1:
         raise SystemExit(f"{label}: expected 1 regex match, found {count}")
     return out
