@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: nightview-publish
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   linux-verify:
