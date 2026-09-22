@@ -1,0 +1,38 @@
+name: Inspect NightView 1.6.8 load path
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-loadpath-1-6-8.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and inspect
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'source.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf source.tar.gz -C buildsrc
+          $lines = Get-Content buildsrc/main_windows.go
+          foreach ($pattern in @('^func \(a \*viewerApp\) loadPath','^func \(a \*viewerApp\) loadImage','^func loadWIC','^func createWIC','^func imageSizeForPath')) {
+            $start = -1
+            for ($i=0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match $pattern) { $start=$i; break }
+            }
+            Write-Host ("=== " + $pattern + " @ " + ($start+1) + " ===")
+            if ($start -ge 0) {
+              $end=[Math]::Min($lines.Count-1,$start+220)
+              for($j=$start+1;$j -le $end;$j++){ if($lines[$j] -match '^func '){$end=$j-1;break} }
+              for($j=$start;$j -le $end;$j++){ Write-Host ("{0:D4}: {1}" -f ($j+1),$lines[$j]) }
+            }
+          }
