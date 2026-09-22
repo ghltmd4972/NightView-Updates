@@ -38,8 +38,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          wc -c source/chunk_*.b64
+          sha256sum source/chunk_*.b64
           cat source/chunk_*.b64 > source.b64
           base64 -d source.b64 > nightview-source.tar.gz
+          sha256sum nightview-source.tar.gz
           sha256sum -c SOURCE_SHA256.txt
           mkdir -p buildsrc
           tar -xzf nightview-source.tar.gz -C buildsrc
