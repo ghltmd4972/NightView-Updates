@@ -42,6 +42,16 @@ jobs:
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-stage.tar.gz -C buildsrc
 
+      - name: Inspect comparison UI source
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem -Recurse -File -Filter '*.go' |
+            Select-String -Pattern 'compare|Compare|split|Split' -Context 3,8 |
+            Select-Object -First 120 |
+            ForEach-Object { $_.ToString() }
+
       - name: Build staged Windows prerequisites
         shell: pwsh
         working-directory: buildsrc
