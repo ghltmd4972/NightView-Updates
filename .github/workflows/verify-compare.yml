@@ -42,12 +42,17 @@ jobs:
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-stage.tar.gz -C buildsrc
 
-      - name: Build AI fixture for integration tests
+      - name: Build staged Windows prerequisites
         shell: pwsh
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.5.0-dev" -o ..\NightView-1.5.0-dev.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
           go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView-1.5.0-dev.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
           $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
           "NIGHTVIEW_AI_FIXTURE=$env:NIGHTVIEW_AI_FIXTURE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -59,12 +64,11 @@ jobs:
           go test -count=1 ./...
           go vet -unsafeptr=false ./...
 
-      - name: Build comparison release candidate
+      - name: Validate comparison release candidate
         shell: pwsh
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.5.0-dev" -o ..\NightView-1.5.0-dev.exe .
           if ((Get-Item ..\NightView-1.5.0-dev.exe).Length -le 0) { throw 'NightView candidate is empty.' }
           $hash = (Get-FileHash ..\NightView-1.5.0-dev.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "NightView candidate SHA-256: $hash"
