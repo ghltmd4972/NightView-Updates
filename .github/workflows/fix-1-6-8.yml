@@ -74,8 +74,11 @@ jobs:
           foreach ($needle in @('isWebPContent(path)','strings.EqualFold(filepath.Ext(path), ".webp") || isWebPContent(path)','!isSupportedImagePath(path) && !isWebPContent(path)')) {
             if (-not $main.Contains($needle)) { throw "Missing content-aware WEBP behavior: $needle" }
           }
-          foreach ($needle in @('NightView.Image.png','PNG 이미지','JPEG 이미지','imageres.dll,-83','imageres.dll,-72','shell32.dll,-16823')) {
+          foreach ($needle in @('associationProgIDForExtension','PNG 이미지','JPEG 이미지','imageres.dll,-83','imageres.dll,-72','shell32.dll,-16823')) {
             if (-not (($assoc + $assocCore + $migration).Contains($needle))) { throw "Missing file type metadata behavior: $needle" }
+          }
+          foreach ($testFile in @('buildsrc\webp_disguised_windows_test.go','buildsrc\installer\association_type_windows_test.go')) {
+            if (-not (Test-Path $testFile)) { throw "Missing generated regression test: $testFile" }
           }
           if ($migration.Contains('associations-v2.done')) { throw 'Old association migration marker still present' }
           if (-not $migration.Contains('associations-v3.done')) { throw 'New association migration marker missing' }
