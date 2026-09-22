@@ -1,0 +1,109 @@
+name: Verify NightView comparison integration
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/verify-comparison.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightview-comparison-verify
+  cancel-in-progress: true
+
+jobs:
+  windows-native-comparison:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct staged source and calculate SHA-256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -lt 1) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $hash = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "STAGED_SOURCE_SHA256=$hash"
+          "STAGED_SOURCE_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+
+      - name: Require comparison implementation and tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $goFiles = Get-ChildItem . -Recurse -File -Filter '*.go'
+          $matches = $goFiles | Select-String -Pattern 'compare|comparison|split' -CaseSensitive:$false
+          if (-not $matches) {
+            throw 'No comparison implementation/test references were found in staged source.'
+          }
+          Write-Host 'Comparison-related source references:'
+          $matches | Select-Object -First 80 | ForEach-Object {
+            Write-Host "$($_.Path):$($_.LineNumber): $($_.Line.Trim())"
+          }
+
+          $tests = (& go test -list 'Compare|Comparison|Split' . 2>&1 | Out-String)
+          Write-Host $tests
+          if ($LASTEXITCODE -ne 0) { throw 'Could not enumerate comparison tests.' }
+          if ($tests -notmatch 'Test.*(Compare|Comparison|Split)') {
+            throw 'No explicit comparison test was found in the main package.'
+          }
+
+      - name: Build Windows release candidates and AI fixture
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.5.0" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+
+      - name: Run Windows native comparison and regression tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
+          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
+          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
+          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
+          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
+          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+
+          Write-Host '--- Explicit comparison tests ---'
+          go test -count=1 -v -run 'Compare|Comparison|Split' .
+          if ($LASTEXITCODE -ne 0) { throw 'Comparison tests failed.' }
+
+          Write-Host '--- Full Windows regression suite ---'
+          go test -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Windows regression suite failed.' }
+          go vet -unsafeptr=false ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Windows go vet failed.' }
+
+      - name: Report verified staged source
+        shell: pwsh
+        run: |
+          Write-Host "VERIFIED_STAGED_SOURCE_SHA256=$env:STAGED_SOURCE_SHA256"
+          Get-FileHash NightView.exe -Algorithm SHA256
+          Get-FileHash NightViewUpdater.exe -Algorithm SHA256
