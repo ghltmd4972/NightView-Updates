@@ -1,16 +1,16 @@
 {
   "schema": 1,
   "enabled": true,
-  "version": "1.6.3",
-  "published_at": "2026-09-22T09:51:47Z",
-  "notes": "NightView 1.6.3\n- 프로그램 실행 시 일반 창이나 단순 최대화가 아니라 F11과 같은 테두리 없는 전체화면으로 바로 시작\n- 전체화면은 현재 모니터 영역을 정확히 채우며 기존 F11 전환 기능 유지\n- ESC 키를 누르면 전체화면 해제 대신 NightView 자체를 즉시 종료\n- 수동으로 업데이트 확인을 눌렀을 때 새 버전이 있으면 중복 확인창 없이 바로 다운로드 -> 교체 -> 자동 재실행\n- 프로그램 시작 시 자동으로 새 버전을 발견한 경우에는 설치 여부 확인창 유지\n- 고정 설치 경로의 기존 NightView.exe 교체 방식 유지\n- 설정과 사용자 데이터 보존 및 업데이트 실패 시 백업/롤백 유지",
+  "version": "1.6.4",
+  "published_at": "2026-09-22T10:33:51Z",
+  "notes": "NightView 1.6.4\n- AI 4×(4K) 변환 완료 후 자동 저장하지 않고 저장 방식을 반드시 선택\n- 예: 원본에 덮어쓰기\n- 아니요: 다른 이름으로 PNG 저장\n- 취소: 저장하지 않고 원본 유지\n- JPG/JPEG 원본 덮어쓰기 시 JPEG 형식을 유지하며 4K 결과로 교체\n- AI 2× 기존 저장 동작은 변경하지 않음\n- 기존 전체화면 시작, ESC 종료, 간소화된 업데이트, 설정 보존 및 롤백 기능 유지",
   "nightview": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.3/NightView.exe",
-    "sha256": "2cd22924088c853e6b0e6376176a17dce062f20d6fe820ad0cce22e3ec9235fa",
-    "size": 6334976
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.4/NightView.exe",
+    "sha256": "cd6c7bd76bb403d58ac98c7ac316bbda11c298f48b17c8b247d89b640b282541",
+    "size": 6373888
   },
   "updater": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.3/NightViewUpdater.exe",
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.4/NightViewUpdater.exe",
     "sha256": "73dfe20c37789b1535394635454aaf055ef86ca072026ffa13e67775c8d4a7e0",
     "size": 2114560
   }
