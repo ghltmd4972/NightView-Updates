@@ -1,0 +1,181 @@
+name: Clean and verify NightView 1.5 staged source
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/clean-stage-1.5.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-clean-stage-1-5
+  cancel-in-progress: true
+
+jobs:
+  clean-and-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct staged 1.5 source in numeric chunk order
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object {
+            $m = [regex]::Match($_.BaseName, '(\d+)$')
+            if (-not $m.Success) { throw "Invalid chunk filename: $($_.Name)" }
+            [int]$m.Groups[1].Value
+          }
+          if ($chunks.Count -lt 1) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source-current.tar.gz'), [Convert]::FromBase64String($text))
+          $actual = (Get-FileHash nightview-source-current.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = ((Get-Content STAGED_SOURCE_SHA256_1_5.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Current staged source SHA-256 mismatch: $actual != $expected"
+          }
+          Write-Host "CURRENT_STAGED_SHA256=$actual"
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source-current.tar.gz -C buildsrc
+
+      - name: Remove generated binaries from source tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payload = Join-Path $PWD 'buildsrc\installer\payload'
+          if (Test-Path $payload) {
+            Get-ChildItem $payload -File -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          }
+          $embedded = @(Get-ChildItem buildsrc -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue)
+          if ($embedded.Count -ne 0) {
+            $embedded | ForEach-Object { Write-Host "Unexpected embedded EXE: $($_.FullName)" }
+            throw 'Generated Windows executables are still embedded in staged source.'
+          }
+
+      - name: Verify formatting and required 1.5 implementation
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $unformatted = @(Get-ChildItem . -Recurse -File -Filter '*.go' | ForEach-Object {
+            $out = & gofmt -l $_.FullName
+            if ($out) { $out }
+          })
+          if ($unformatted.Count -ne 0) {
+            Write-Host 'Unformatted Go files:'
+            $unformatted | ForEach-Object { Write-Host $_ }
+            throw 'gofmt verification failed.'
+          }
+
+          foreach ($file in @('comparison_core.go','comparison_windows.go','comparison_core_test.go','comparison_windows_test.go','ai_cache.go','ai_cache_test.go')) {
+            if (-not (Test-Path $file -PathType Leaf)) { throw "Required 1.5 source file missing: $file" }
+          }
+
+      - name: Build exact Windows candidates and fixtures
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.5.0" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
+
+      - name: Run focused native comparison/cache tests and full regression
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
+          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
+          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
+          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
+          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
+          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+
+          go test -count=1 -v -run 'TestCompareSplitClamp|TestCompareDimensionRelation|TestAICompareNativeSplitRendering|TestAICache' .
+          if ($LASTEXITCODE -ne 0) { throw 'Focused NightView 1.5 tests failed.' }
+
+          go test -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Full Windows regression suite failed.' }
+
+          go vet -unsafeptr=false ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Windows go vet failed.' }
+
+      - name: Build setup from verified payload
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewSetup.exe .\installer
+          foreach ($p in @('..\NightView.exe','..\NightViewUpdater.exe','..\NightViewSetup.exe')) {
+            if ((Get-Item $p).Length -le 0) { throw "Empty binary: $p" }
+            Get-FileHash $p -Algorithm SHA256
+          }
+
+      - name: Remove generated payload before clean source repack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem 'buildsrc\installer\payload' -File -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $embedded = @(Get-ChildItem buildsrc -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue)
+          if ($embedded.Count -ne 0) {
+            $embedded | ForEach-Object { Write-Host "Unexpected embedded EXE before repack: $($_.FullName)" }
+            throw 'Source repack would contain executables.'
+          }
+
+      - name: Repack clean verified source with fixed-width chunks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          tar -czf nightview-source-1.5-clean.tar.gz -C buildsrc .
+          $hash = (Get-FileHash nightview-source-1.5-clean.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item nightview-source-1.5-clean.tar.gz).Length
+          if ($size -gt 1048576) {
+            throw "Clean source archive is unexpectedly large: $size bytes"
+          }
+          $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path 'nightview-source-1.5-clean.tar.gz')))
+          Remove-Item source/current/chunk_*.b64 -Force
+          $chunkSize = 8000
+          $count = [Math]::Ceiling($b64.Length / $chunkSize)
+          for ($i = 0; $i -lt $count; $i++) {
+            $start = $i * $chunkSize
+            $len = [Math]::Min($chunkSize, $b64.Length - $start)
+            $part = $b64.Substring($start, $len)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $i)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, [Text.Encoding]::ASCII)
+          }
+          "$hash  nightview-source.tar.gz" | Set-Content STAGED_SOURCE_SHA256_1_5.txt -Encoding ascii
+          Write-Host "CLEAN_STAGED_SHA256=$hash"
+          Write-Host "CLEAN_STAGED_SIZE=$size"
+          Write-Host "CLEAN_STAGED_CHUNKS=$count"
+
+      - name: Commit only clean verified source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A source/current STAGED_SOURCE_SHA256_1_5.txt
+          if (git diff --cached --quiet) { throw 'No clean staged source changes produced.' }
+          git commit -m 'Clean verified NightView 1.5 staged source'
+          git push
