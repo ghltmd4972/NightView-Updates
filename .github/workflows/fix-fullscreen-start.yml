@@ -68,6 +68,12 @@ jobs:
 
           $main = [regex]::Replace($main, '(?m)^\tSW_SHOWMAXIMIZED\s+= 3\r?\n', '')
 
+          $escPattern = '(?ms)^\tcase VK_ESCAPE:\r?\n\t\tif a\.aiComparisonActive\(\) \{\r?\n\t\t\ta\.endAIComparison\(\)\r?\n\t\t\treturn\r?\n\t\t\}\r?\n\t\tif a\.fullscreen \{\r?\n\t\t\ta\.toggleFullscreen\(\)\r?\n\t\t\}\r?\n'
+          $escMatches = [regex]::Matches($main, $escPattern)
+          if ($escMatches.Count -ne 1) { throw "Expected exactly one ESC handling block, found $($escMatches.Count)." }
+          $escReplacement = $tab + 'case VK_ESCAPE:' + [string][char]10 + $tab + $tab + 'pPostMessage.Call(a.hwnd, WM_CLOSE, 0, 0)' + [string][char]10
+          $main = [regex]::Replace($main, $escPattern, $escReplacement)
+
           [IO.File]::WriteAllText((Join-Path $PWD $path), $main, (New-Object Text.UTF8Encoding($false)))
           gofmt -w main_windows.go
 
@@ -75,6 +81,7 @@ jobs:
           if ($check.Contains('pShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)')) { throw 'Maximized-only startup call remains.' }
           if (-not $check.Contains('pShowWindow.Call(hwnd, SW_SHOW)')) { throw 'Normal show call missing.' }
           if (-not $check.Contains('app.toggleFullscreen()')) { throw 'Fullscreen startup call missing.' }
+          if (-not $check.Contains('pPostMessage.Call(a.hwnd, WM_CLOSE, 0, 0)')) { throw 'ESC exit action missing.' }
 
       - name: Build and run regression tests
         shell: pwsh
@@ -137,6 +144,10 @@ jobs:
               [DllImport("user32.dll", CharSet=CharSet.Unicode)]
               [return: MarshalAs(UnmanagedType.Bool)]
               public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);
+
+              [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+              [return: MarshalAs(UnmanagedType.Bool)]
+              public static extern bool PostMessage(IntPtr hWnd, uint Msg, UIntPtr wParam, IntPtr lParam);
           }
           "@
 
@@ -173,6 +184,10 @@ jobs:
               throw "Window rectangle does not match monitor rectangle. Window=$($rect.Left),$($rect.Top),$($rect.Right),$($rect.Bottom) Monitor=$($mi.rcMonitor.Left),$($mi.rcMonitor.Top),$($mi.rcMonitor.Right),$($mi.rcMonitor.Bottom)"
             }
             Write-Host 'Verified: NightView starts in borderless true fullscreen and fills the active monitor.'
+
+            if (-not [NightViewFullscreenTest]::PostMessage($hwnd, 0x0100, [UIntPtr]0x1B, [IntPtr]::Zero)) { throw 'Failed to post ESC keydown.' }
+            if (-not $p.WaitForExit(5000)) { throw 'NightView did not exit within 5 seconds after ESC.' }
+            Write-Host 'Verified: ESC closes NightView.'
           }
           finally {
             if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
@@ -195,6 +210,7 @@ jobs:
             'NightView 1.6.3',
             '- 프로그램 실행 시 일반 창이나 단순 최대화가 아니라 F11과 같은 테두리 없는 전체화면으로 바로 시작',
             '- 전체화면은 현재 모니터 영역을 정확히 채우며 기존 F11 전환 기능 유지',
+            '- ESC 키를 누르면 전체화면 해제 대신 NightView 자체를 즉시 종료',
             '- 수동으로 업데이트 확인을 눌렀을 때 새 버전이 있으면 중복 확인창 없이 바로 다운로드 -> 교체 -> 자동 재실행',
             '- 프로그램 시작 시 자동으로 새 버전을 발견한 경우에는 설치 여부 확인창 유지',
             '- 고정 설치 경로의 기존 NightView.exe 교체 방식 유지',
