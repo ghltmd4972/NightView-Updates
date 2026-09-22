@@ -1,0 +1,112 @@
+name: Fix NightView 1.6.7 regression tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fix-1-6-7-tests.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-1-6-7-tests
+  cancel-in-progress: true
+
+jobs:
+  patch-test-stage:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct and verify 1.6.7 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $expected = ((Get-Content SOURCE_SHA256.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Source hash mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+          if ((Get-Content VERSION -Raw).Trim() -ne '1.6.7') { throw 'Expected NightView 1.6.7 staged source' }
+
+      - name: Update legacy format expectations
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $p = 'core_test.go'
+          $s = Get-Content $p -Raw
+          $old1 = 'for _, p := range []string{"a.JPG", "a.png", "a.GIF", "a.tiff", "a.ico", "a.bmp"} {'
+          $new1 = 'for _, p := range []string{"a.JPG", "a.png", "a.GIF", "a.tiff", "a.ico", "a.bmp", "a.webp", "A.WEBP"} {'
+          $old2 = 'for _, p := range []string{"a.webp", "a.avif", "a.heic", "a.txt"} {'
+          $new2 = 'for _, p := range []string{"a.avif", "a.heic", "a.txt"} {'
+          $old3 = 'want := []string{"1.gif", "2.JPG", "10.png"}'
+          $new3 = 'want := []string{"1.gif", "2.JPG", "3.webp", "10.png"}'
+          foreach ($pair in @(@($old1,$new1),@($old2,$new2),@($old3,$new3))) {
+            if (-not $s.Contains($pair[0])) { throw ("Expected test anchor not found: " + $pair[0]) }
+            $s = $s.Replace($pair[0], $pair[1])
+          }
+          [IO.File]::WriteAllText((Join-Path $PWD $p), $s, (New-Object Text.UTF8Encoding($false)))
+          gofmt -w core_test.go
+
+      - name: Build and run full Windows regression
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go test -count=1 .\...
+          go vet -unsafeptr=false .\...
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.7" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+
+      - name: Repack corrected 1.6.7 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-1.6.7.tar.gz *
+          Pop-Location
+
+          $hash = (Get-FileHash 'nightview-source-1.6.7.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  nightview-source.tar.gz" | Set-Content 'SOURCE_SHA256.txt' -Encoding ascii
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6_7.txt' -Encoding ascii
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-1.6.7.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Corrected 1.6.7 source SHA-256: $hash"
+
+      - name: Commit corrected verified source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current SOURCE_SHA256.txt STAGED_SOURCE_SHA256_1_6_7.txt
+          if (git diff --cached --quiet) { throw 'No source test correction was staged' }
+          git commit -m 'Fix NightView 1.6.7 WEBP regression expectations'
+          git push
