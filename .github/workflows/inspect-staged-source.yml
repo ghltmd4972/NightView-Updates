@@ -23,28 +23,16 @@ jobs:
           [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-source.tar.gz -C buildsrc
-      - name: Print relevant viewer and AI source context
+      - name: Print exact viewer ranges
         shell: pwsh
         working-directory: buildsrc
         run: |
-          Write-Host '=== GO FILES ==='
-          Get-ChildItem . -File -Filter '*.go' | Select-Object -ExpandProperty Name
-          Write-Host '=== viewerApp / paint / menu / keyboard contexts ==='
-          Select-String -Path main_windows.go -Pattern 'type viewerApp|WM_PAINT|WM_RBUTTONUP|WM_KEYDOWN|showContextMenu|zoom|pan|currentPath|loadImage' -Context 4,12 | ForEach-Object {
-            Write-Host $_.Context.PreContext
-            Write-Host ("{0}: {1}" -f $_.LineNumber,$_.Line)
-            Write-Host $_.Context.PostContext
-            Write-Host '---'
-          }
-          Write-Host '=== AI WINDOWS ==='
-          Get-Content ai_windows.go
-          Write-Host '=== AI CORE HEAD/KEYS ==='
-          Select-String -Path ai_core.go -Pattern 'type |func |AI_|cache|upscale|result|original' -Context 2,8 | ForEach-Object {
-            Write-Host $_.Context.PreContext
-            Write-Host ("{0}: {1}" -f $_.LineNumber,$_.Line)
-            Write-Host $_.Context.PostContext
-            Write-Host '---'
-          }
-          Write-Host '=== AI TESTS ==='
-          Get-Content ai_core_test.go
-          if (Test-Path ai_windows_integration_test.go) { Get-Content ai_windows_integration_test.go }
+          $lines = Get-Content main_windows.go
+          Write-Host '=== MAIN 430-540 ==='
+          for ($i=429; $i -lt [Math]::Min(540,$lines.Count); $i++) { Write-Host ("{0}: {1}" -f ($i+1),$lines[$i]) }
+          Write-Host '=== MAIN 620-790 ==='
+          for ($i=619; $i -lt [Math]::Min(790,$lines.Count); $i++) { Write-Host ("{0}: {1}" -f ($i+1),$lines[$i]) }
+          Write-Host '=== MAIN 810-960 ==='
+          for ($i=809; $i -lt [Math]::Min(960,$lines.Count); $i++) { Write-Host ("{0}: {1}" -f ($i+1),$lines[$i]) }
+          Write-Host '=== MAIN 960-1130 ==='
+          for ($i=959; $i -lt [Math]::Min(1130,$lines.Count); $i++) { Write-Host ("{0}: {1}" -f ($i+1),$lines[$i]) }
