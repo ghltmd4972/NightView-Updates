@@ -1,0 +1,67 @@
+name: Inspect NightView 1.6.8 targets
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-1-6-8-targets.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+      - name: Inspect decoder and associations
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lines = Get-Content main_windows.go
+
+          function Print-Function([string]$namePattern) {
+            $start = -1
+            for ($i=0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match $namePattern) { $start = $i; break }
+            }
+            if ($start -lt 0) {
+              Write-Host ("=== NOT FOUND: " + $namePattern + " ===")
+              return
+            }
+            $end = $lines.Count - 1
+            for ($j=$start+1; $j -lt $lines.Count; $j++) {
+              if ($lines[$j] -match '^func ') { $end = $j - 1; break }
+            }
+            Write-Host ("=== " + $namePattern + " lines " + ($start+1) + "-" + ($end+1) + " ===")
+            for ($k=$start; $k -le $end; $k++) {
+              Write-Host ("{0:D4}: {1}" -f ($k+1), $lines[$k])
+            }
+          }
+
+          Print-Function '^func \(a \*viewerApp\) openImagePath'
+          Print-Function '^func transcodeWebPToTempPNG'
+          Print-Function '^func decode'
+          Write-Host '=== CORE FORMAT FUNCTIONS ==='
+          Get-Content core.go | Select-String -Pattern 'isSupportedImagePath|supportedImageExtensions|webp|image.Decode|DecodeConfig' -CaseSensitive:$false -Context 8,30 | ForEach-Object {
+            Write-Host ('--- core.go:' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
+          Write-Host '=== ASSOCIATION MIGRATION ==='
+          Get-Content association_migration_windows.go
+          Write-Host '=== INSTALLER ASSOCIATIONS ==='
+          Get-Content installer/association_windows.go
+          Write-Host '=== ASSOCIATION CORE ==='
+          Get-Content installer/association_core.go
