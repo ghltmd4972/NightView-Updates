@@ -57,22 +57,30 @@ jobs:
 
           $oldCall = $tab + 'pShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)'
           $newCall = $tab + 'pShowWindow.Call(hwnd, SW_SHOW)'
-          $count = ([regex]::Matches($main, [regex]::Escape($oldCall))).Count
-          if ($count -ne 1) { throw "Expected exactly one maximized startup call, found $count." }
-          $main = $main.Replace($oldCall, $newCall)
+          $fullscreenStartup = 'app.toggleFullscreen()'
+          if ($main.Contains($oldCall)) {
+            $count = ([regex]::Matches($main, [regex]::Escape($oldCall))).Count
+            if ($count -ne 1) { throw "Expected exactly one maximized startup call, found $count." }
+            $main = $main.Replace($oldCall, $newCall)
 
-          $updateCall = $tab + 'pUpdateWindow.Call(hwnd)'
-          $updateCount = ([regex]::Matches($main, [regex]::Escape($updateCall))).Count
-          if ($updateCount -ne 1) { throw "Expected exactly one startup UpdateWindow call, found $updateCount." }
-          $main = $main.Replace($updateCall, $updateCall + [string][char]10 + $tab + 'app.toggleFullscreen()')
+            $updateCall = $tab + 'pUpdateWindow.Call(hwnd)'
+            $updateCount = ([regex]::Matches($main, [regex]::Escape($updateCall))).Count
+            if ($updateCount -ne 1) { throw "Expected exactly one startup UpdateWindow call, found $updateCount." }
+            $main = $main.Replace($updateCall, $updateCall + [string][char]10 + $tab + $fullscreenStartup)
+          } elseif (-not $main.Contains($fullscreenStartup)) {
+            throw 'Neither maximized startup nor fullscreen startup was found.'
+          }
 
           $main = [regex]::Replace($main, '(?m)^\tSW_SHOWMAXIMIZED\s+= 3\r?\n', '')
 
-          $escPattern = '(?ms)^\tcase VK_ESCAPE:\r?\n\t\tif a\.aiComparisonActive\(\) \{\r?\n\t\t\ta\.endAIComparison\(\)\r?\n\t\t\treturn\r?\n\t\t\}\r?\n\t\tif a\.fullscreen \{\r?\n\t\t\ta\.toggleFullscreen\(\)\r?\n\t\t\}\r?\n'
-          $escMatches = [regex]::Matches($main, $escPattern)
-          if ($escMatches.Count -ne 1) { throw "Expected exactly one ESC handling block, found $($escMatches.Count)." }
-          $escReplacement = $tab + 'case VK_ESCAPE:' + [string][char]10 + $tab + $tab + 'pPostMessage.Call(a.hwnd, WM_CLOSE, 0, 0)' + [string][char]10
-          $main = [regex]::Replace($main, $escPattern, $escReplacement)
+          $escExit = 'pPostMessage.Call(a.hwnd, WM_CLOSE, 0, 0)'
+          if (-not $main.Contains($escExit)) {
+            $escPattern = '(?ms)^\tcase VK_ESCAPE:\r?\n\t\tif a\.aiComparisonActive\(\) \{\r?\n\t\t\ta\.endAIComparison\(\)\r?\n\t\t\treturn\r?\n\t\t\}\r?\n\t\tif a\.fullscreen \{\r?\n\t\t\ta\.toggleFullscreen\(\)\r?\n\t\t\}\r?\n'
+            $escMatches = [regex]::Matches($main, $escPattern)
+            if ($escMatches.Count -ne 1) { throw "Expected exactly one ESC handling block, found $($escMatches.Count)." }
+            $escReplacement = $tab + 'case VK_ESCAPE:' + [string][char]10 + $tab + $tab + $escExit + [string][char]10
+            $main = [regex]::Replace($main, $escPattern, $escReplacement)
+          }
 
           [IO.File]::WriteAllText((Join-Path $PWD $path), $main, (New-Object Text.UTF8Encoding($false)))
           gofmt -w main_windows.go
