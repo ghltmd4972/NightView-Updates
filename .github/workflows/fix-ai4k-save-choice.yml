@@ -56,60 +56,60 @@ jobs:
           $src = Get-Content $path -Raw
 
           $oldCache = @'
-	if cached, ok := findValidAICache(localData, input, sourceSHA, scale, m); ok {
-		finalPath, copyErr := commitAICachedOutput(cached, input, scale)
-		if copyErr == nil {
-			a.finishAIUpscale(finalPath, sourceSHA, true, nil)
-			return
-		}
-	}
-'@
+          	if cached, ok := findValidAICache(localData, input, sourceSHA, scale, m); ok {
+          		finalPath, copyErr := commitAICachedOutput(cached, input, scale)
+          		if copyErr == nil {
+          			a.finishAIUpscale(finalPath, sourceSHA, true, nil)
+          			return
+          		}
+          	}
+          '@
           $newCache = @'
-	if cached, ok := findValidAICache(localData, input, sourceSHA, scale, m); ok {
-		if scale == 4 {
-			pendingPath, copyErr := stageAI4KResult(localData, cached)
-			if copyErr == nil {
-				a.finishAIUpscale(pendingPath, sourceSHA, true, nil)
-				return
-			}
-		} else {
-			finalPath, copyErr := commitAICachedOutput(cached, input, scale)
-			if copyErr == nil {
-				a.finishAIUpscale(finalPath, sourceSHA, true, nil)
-				return
-			}
-		}
-	}
-'@
+          	if cached, ok := findValidAICache(localData, input, sourceSHA, scale, m); ok {
+          		if scale == 4 {
+          			pendingPath, copyErr := stageAI4KResult(localData, cached)
+          			if copyErr == nil {
+          				a.finishAIUpscale(pendingPath, sourceSHA, true, nil)
+          				return
+          			}
+          		} else {
+          			finalPath, copyErr := commitAICachedOutput(cached, input, scale)
+          			if copyErr == nil {
+          				a.finishAIUpscale(finalPath, sourceSHA, true, nil)
+          				return
+          			}
+          		}
+          	}
+          '@
           if (-not $src.Contains($oldCache)) { throw 'AI cache commit block not found.' }
           $src = $src.Replace($oldCache, $newCache)
 
           $oldCommit = @'
-	finalPath, err := commitAIOutput(tmpOutput, input, scale)
-	if err != nil {
-		a.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 결과 저장 실패: %w", err))
-		return
-	}
-	a.finishAIUpscale(finalPath, sourceSHA, false, nil)
-'@
+          	finalPath, err := commitAIOutput(tmpOutput, input, scale)
+          	if err != nil {
+          		a.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 결과 저장 실패: %w", err))
+          		return
+          	}
+          	a.finishAIUpscale(finalPath, sourceSHA, false, nil)
+          '@
           $newCommit = @'
-	if scale == 4 {
-		pendingPath, err := stageAI4KResult(localData, tmpOutput)
-		if err != nil {
-			a.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 4K 결과 준비 실패: %w", err))
-			return
-		}
-		a.finishAIUpscale(pendingPath, sourceSHA, false, nil)
-		return
-	}
-
-	finalPath, err := commitAIOutput(tmpOutput, input, scale)
-	if err != nil {
-		a.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 결과 저장 실패: %w", err))
-		return
-	}
-	a.finishAIUpscale(finalPath, sourceSHA, false, nil)
-'@
+          	if scale == 4 {
+          		pendingPath, err := stageAI4KResult(localData, tmpOutput)
+          		if err != nil {
+          			a.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 4K 결과 준비 실패: %w", err))
+          			return
+          		}
+          		a.finishAIUpscale(pendingPath, sourceSHA, false, nil)
+          		return
+          	}
+          
+          	finalPath, err := commitAIOutput(tmpOutput, input, scale)
+          	if err != nil {
+          		a.finishAIUpscale("", sourceSHA, false, fmt.Errorf("AI 결과 저장 실패: %w", err))
+          		return
+          	}
+          	a.finishAIUpscale(finalPath, sourceSHA, false, nil)
+          '@
           if (-not $src.Contains($oldCommit)) { throw 'AI final commit block not found.' }
           $src = $src.Replace($oldCommit, $newCommit)
 
@@ -118,82 +118,82 @@ jobs:
           if ($matches.Count -ne 1) { throw "Expected exactly one onAIUpscaleDone function, found $($matches.Count)." }
 
           $newDone = @'
-func (a *viewerApp) onAIUpscaleDone() {
-	aiUpscales.mu.Lock()
-	result := aiUpscales.resultPath
-	input := aiUpscales.inputPath
-	inputSHA := aiUpscales.inputSHA
-	scale := aiUpscales.scale
-	cacheHit := aiUpscales.cacheHit
-	aiUpscales.mu.Unlock()
-	if result == "" {
-		a.onAIUpscaleErrorText("AI 결과 파일 경로가 비어 있습니다.")
-		return
-	}
-
-	if scale != 4 {
-		a.setAICompareCandidate(input, result, scale, inputSHA)
-		a.openImagePath(result)
-		cacheNote := ""
-		if cacheHit {
-			cacheNote = "\n\n같은 원본/배율의 검증된 캐시를 사용해 AI를 다시 실행하지 않았습니다."
-		}
-		messageBox(a.hwnd, fmt.Sprintf("AI %d× 업스케일이 완료되었습니다.\n\n%s\n\n원본 파일은 변경하지 않았습니다.%s\n\nC 키로 원본과 AI 결과를 비교할 수 있습니다.", scale, result, cacheNote), "NightView AI 업스케일", MB_OK|MB_ICONINFO)
-		return
-	}
-
-	defer os.Remove(result)
-
-	cacheNote := ""
-	if cacheHit {
-		cacheNote = "\n\n같은 원본/배율의 검증된 캐시를 사용했습니다."
-	}
-	prompt := "AI 4× 변환이 완료되었습니다.\n\n저장 방법을 선택하세요.\n\n예: 원본에 덮어쓰기\n아니요: 다른 이름으로 저장\n취소: 저장하지 않음" + cacheNote
-	choice := messageBoxResult(a.hwnd, prompt, "NightView AI 4K 저장", aiMBYesNoCancel|MB_ICONINFO)
-
-	savedPath := ""
-	switch choice {
-	case IDYES:
-		wasCurrent := strings.EqualFold(filepath.Clean(a.currentPath), filepath.Clean(input))
-		if wasCurrent {
-			a.disposeCurrentImage()
-		}
-		if err := overwriteAI4KOriginal(result, input); err != nil {
-			if wasCurrent {
-				a.openImagePath(input)
-			}
-			a.onAIUpscaleErrorText("원본 파일에 덮어쓰지 못했습니다.\n\n" + err.Error())
-			return
-		}
-		savedPath = input
-	case aiIDNo:
-		target, ok := a.chooseAI4KSavePath(input)
-		if !ok {
-			a.restoreTitleAfterAIChoice()
-			return
-		}
-		if err := saveAI4KAsPNG(result, target); err != nil {
-			a.onAIUpscaleErrorText("AI 4K 결과를 저장하지 못했습니다.\n\n" + err.Error())
-			return
-		}
-		savedPath = target
-	default:
-		a.restoreTitleAfterAIChoice()
-		return
-	}
-
-	if !strings.EqualFold(filepath.Clean(savedPath), filepath.Clean(input)) {
-		a.setAICompareCandidate(input, savedPath, scale, inputSHA)
-	}
-	a.openImagePath(savedPath)
-
-	if strings.EqualFold(filepath.Clean(savedPath), filepath.Clean(input)) {
-		messageBox(a.hwnd, "AI 4K 결과를 원본 파일에 덮어썼습니다.\n\n"+savedPath, "NightView AI 4K", MB_OK|MB_ICONINFO)
-	} else {
-		messageBox(a.hwnd, "AI 4K 결과를 저장했습니다.\n\n"+savedPath+"\n\nC 키로 원본과 AI 결과를 비교할 수 있습니다.", "NightView AI 4K", MB_OK|MB_ICONINFO)
-	}
-}
-'@
+          func (a *viewerApp) onAIUpscaleDone() {
+          	aiUpscales.mu.Lock()
+          	result := aiUpscales.resultPath
+          	input := aiUpscales.inputPath
+          	inputSHA := aiUpscales.inputSHA
+          	scale := aiUpscales.scale
+          	cacheHit := aiUpscales.cacheHit
+          	aiUpscales.mu.Unlock()
+          	if result == "" {
+          		a.onAIUpscaleErrorText("AI 결과 파일 경로가 비어 있습니다.")
+          		return
+          	}
+          
+          	if scale != 4 {
+          		a.setAICompareCandidate(input, result, scale, inputSHA)
+          		a.openImagePath(result)
+          		cacheNote := ""
+          		if cacheHit {
+          			cacheNote = "\n\n같은 원본/배율의 검증된 캐시를 사용해 AI를 다시 실행하지 않았습니다."
+          		}
+          		messageBox(a.hwnd, fmt.Sprintf("AI %d× 업스케일이 완료되었습니다.\n\n%s\n\n원본 파일은 변경하지 않았습니다.%s\n\nC 키로 원본과 AI 결과를 비교할 수 있습니다.", scale, result, cacheNote), "NightView AI 업스케일", MB_OK|MB_ICONINFO)
+          		return
+          	}
+          
+          	defer os.Remove(result)
+          
+          	cacheNote := ""
+          	if cacheHit {
+          		cacheNote = "\n\n같은 원본/배율의 검증된 캐시를 사용했습니다."
+          	}
+          	prompt := "AI 4× 변환이 완료되었습니다.\n\n저장 방법을 선택하세요.\n\n예: 원본에 덮어쓰기\n아니요: 다른 이름으로 저장\n취소: 저장하지 않음" + cacheNote
+          	choice := messageBoxResult(a.hwnd, prompt, "NightView AI 4K 저장", aiMBYesNoCancel|MB_ICONINFO)
+          
+          	savedPath := ""
+          	switch choice {
+          	case IDYES:
+          		wasCurrent := strings.EqualFold(filepath.Clean(a.currentPath), filepath.Clean(input))
+          		if wasCurrent {
+          			a.disposeCurrentImage()
+          		}
+          		if err := overwriteAI4KOriginal(result, input); err != nil {
+          			if wasCurrent {
+          				a.openImagePath(input)
+          			}
+          			a.onAIUpscaleErrorText("원본 파일에 덮어쓰지 못했습니다.\n\n" + err.Error())
+          			return
+          		}
+          		savedPath = input
+          	case aiIDNo:
+          		target, ok := a.chooseAI4KSavePath(input)
+          		if !ok {
+          			a.restoreTitleAfterAIChoice()
+          			return
+          		}
+          		if err := saveAI4KAsPNG(result, target); err != nil {
+          			a.onAIUpscaleErrorText("AI 4K 결과를 저장하지 못했습니다.\n\n" + err.Error())
+          			return
+          		}
+          		savedPath = target
+          	default:
+          		a.restoreTitleAfterAIChoice()
+          		return
+          	}
+          
+          	if !strings.EqualFold(filepath.Clean(savedPath), filepath.Clean(input)) {
+          		a.setAICompareCandidate(input, savedPath, scale, inputSHA)
+          	}
+          	a.openImagePath(savedPath)
+          
+          	if strings.EqualFold(filepath.Clean(savedPath), filepath.Clean(input)) {
+          		messageBox(a.hwnd, "AI 4K 결과를 원본 파일에 덮어썼습니다.\n\n"+savedPath, "NightView AI 4K", MB_OK|MB_ICONINFO)
+          	} else {
+          		messageBox(a.hwnd, "AI 4K 결과를 저장했습니다.\n\n"+savedPath+"\n\nC 키로 원본과 AI 결과를 비교할 수 있습니다.", "NightView AI 4K", MB_OK|MB_ICONINFO)
+          	}
+          }
+          '@
           $src = [regex]::Replace($src, $pattern, $newDone + [Environment]::NewLine)
           [IO.File]::WriteAllText((Join-Path $PWD $path), $src, (New-Object Text.UTF8Encoding($false)))
 
@@ -204,379 +204,379 @@ func (a *viewerApp) onAIUpscaleDone() {
           $ErrorActionPreference = 'Stop'
 
           $helper = @'
-//go:build windows
-
-package main
-
-import (
-	"errors"
-	"fmt"
-	"image/jpeg"
-	"image/png"
-	"os"
-	"path/filepath"
-	"strings"
-	"syscall"
-	"unicode/utf16"
-	"unsafe"
-)
-
-const (
-	aiMBYesNoCancel      = 0x00000003
-	aiIDNo               = 7
-	aiOFNOverwritePrompt = 0x00000002
-	aiMoveReplace        = 0x00000001
-	aiMoveWriteThrough   = 0x00000008
-)
-
-var (
-	pGetSaveFileNameAI = comdlg32.NewProc("GetSaveFileNameW")
-	pMoveFileExAI       = kernel32.NewProc("MoveFileExW")
-)
-
-func ai4KPendingDir(localData string) string {
-	return filepath.Join(localData, "ai-pending")
-}
-
-func stageAI4KResult(localData, src string) (string, error) {
-	dir := ai4KPendingDir(localData)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	f, err := os.CreateTemp(dir, "nightview-ai4k-*.png")
-	if err != nil {
-		return "", err
-	}
-	dst := f.Name()
-	if err := f.Close(); err != nil {
-		_ = os.Remove(dst)
-		return "", err
-	}
-	_ = os.Remove(dst)
-	if err := copyFileExclusive(src, dst); err != nil {
-		return "", err
-	}
-	if err := validateAIUpscaleOutput(dst); err != nil {
-		_ = os.Remove(dst)
-		return "", err
-	}
-	return dst, nil
-}
-
-func utf16DialogString(s string) []uint16 {
-	out := utf16.Encode([]rune(s))
-	return append(out, 0)
-}
-
-func (a *viewerApp) chooseAI4KSavePath(input string) (string, bool) {
-	filter := utf16DialogString("PNG 이미지 (*.png)\x00*.png\x00모든 파일 (*.*)\x00*.*\x00\x00")
-	title := mustUTF16("AI 4K 결과를 다른 이름으로 저장")
-	defExt := mustUTF16("png")
-	initialDir := mustUTF16(filepath.Dir(input))
-
-	for {
-		buf := make([]uint16, 32768)
-		initialName := utf16DialogString(nextAIOutputPath(input, 4))
-		copy(buf, initialName)
-
-		ofn := OPENFILENAME{
-			LStructSize:    uint32(unsafe.Sizeof(OPENFILENAME{})),
-			HwndOwner:      a.hwnd,
-			LpstrFilter:    &filter[0],
-			NFilterIndex:   1,
-			LpstrFile:      &buf[0],
-			NMaxFile:       uint32(len(buf)),
-			LpstrInitialDir: initialDir,
-			LpstrTitle:     title,
-			Flags:          OFN_PATHMUSTEXIST | OFN_EXPLORER | aiOFNOverwritePrompt,
-			LpstrDefExt:    defExt,
-		}
-		if r, _, _ := pGetSaveFileNameAI.Call(uintptr(unsafe.Pointer(&ofn))); r == 0 {
-			return "", false
-		}
-		target := filepath.Clean(syscall.UTF16ToString(buf))
-		if filepath.Ext(target) == "" {
-			target += ".png"
-		}
-		if !strings.EqualFold(filepath.Ext(target), ".png") {
-			messageBox(a.hwnd, "AI 4K 결과는 PNG 파일로 저장됩니다.\n\n파일 확장자를 .png로 지정해주세요.", "NightView AI 4K", MB_OK|MB_ICONINFO)
-			continue
-		}
-		if strings.EqualFold(filepath.Clean(target), filepath.Clean(input)) {
-			messageBox(a.hwnd, "원본과 같은 경로는 '다른 이름으로 저장'에 사용할 수 없습니다.\n\n원본에 저장하려면 '원본에 덮어쓰기'를 선택해주세요.", "NightView AI 4K", MB_OK|MB_ICONINFO)
-			continue
-		}
-		return target, true
-	}
-}
-
-func (a *viewerApp) restoreTitleAfterAIChoice() {
-	if a.currentPath != "" {
-		a.setTitle(filepath.Base(a.currentPath) + " — NightView")
-	} else {
-		a.setTitle("NightView")
-	}
-}
-
-func moveFileReplace(src, dst string) error {
-	src16, err := syscall.UTF16PtrFromString(src)
-	if err != nil {
-		return err
-	}
-	dst16, err := syscall.UTF16PtrFromString(dst)
-	if err != nil {
-		return err
-	}
-	r, _, callErr := pMoveFileExAI.Call(
-		uintptr(unsafe.Pointer(src16)),
-		uintptr(unsafe.Pointer(dst16)),
-		aiMoveReplace|aiMoveWriteThrough,
-	)
-	if r == 0 {
-		return callErr
-	}
-	return nil
-}
-
-func atomicCopyPNG(src, dst string) error {
-	if !strings.EqualFold(filepath.Ext(dst), ".png") {
-		return errors.New("destination must use .png")
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(filepath.Dir(dst), ".nightview-save-*.png")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	_ = os.Remove(tmp)
-	if err := copyFileExclusive(src, tmp); err != nil {
-		return err
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if err := validateAIUpscaleOutput(tmp); err != nil {
-		return err
-	}
-	if err := moveFileReplace(tmp, dst); err != nil {
-		return err
-	}
-	ok = true
-	return nil
-}
-
-func saveAI4KAsPNG(src, dst string) error {
-	return atomicCopyPNG(src, dst)
-}
-
-func overwriteAI4KOriginal(src, original string) error {
-	switch strings.ToLower(filepath.Ext(original)) {
-	case ".png":
-		return atomicCopyPNG(src, original)
-	case ".jpg", ".jpeg", ".jpe", ".jfif":
-		return overwriteAI4KJPEG(src, original)
-	default:
-		return fmt.Errorf("지원하지 않는 원본 형식입니다: %s", filepath.Ext(original))
-	}
-}
-
-func overwriteAI4KJPEG(src, original string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	img, err := png.Decode(in)
-	_ = in.Close()
-	if err != nil {
-		return fmt.Errorf("AI PNG 읽기 실패: %w", err)
-	}
-
-	f, err := os.CreateTemp(filepath.Dir(original), ".nightview-overwrite-*.jpg")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	ok := false
-	defer func() {
-		_ = f.Close()
-		if !ok {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 100}); err != nil {
-		return fmt.Errorf("JPEG 변환 실패: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	cfg, format, err := imageConfig(tmp)
-	if err != nil {
-		return err
-	}
-	if format != "jpeg" || cfg.Width <= 0 || cfg.Height <= 0 {
-		return errors.New("변환된 JPEG 검증 실패")
-	}
-	if err := moveFileReplace(tmp, original); err != nil {
-		return err
-	}
-	ok = true
-	return nil
-}
-'@
+          //go:build windows
+          
+          package main
+          
+          import (
+          	"errors"
+          	"fmt"
+          	"image/jpeg"
+          	"image/png"
+          	"os"
+          	"path/filepath"
+          	"strings"
+          	"syscall"
+          	"unicode/utf16"
+          	"unsafe"
+          )
+          
+          const (
+          	aiMBYesNoCancel      = 0x00000003
+          	aiIDNo               = 7
+          	aiOFNOverwritePrompt = 0x00000002
+          	aiMoveReplace        = 0x00000001
+          	aiMoveWriteThrough   = 0x00000008
+          )
+          
+          var (
+          	pGetSaveFileNameAI = comdlg32.NewProc("GetSaveFileNameW")
+          	pMoveFileExAI       = kernel32.NewProc("MoveFileExW")
+          )
+          
+          func ai4KPendingDir(localData string) string {
+          	return filepath.Join(localData, "ai-pending")
+          }
+          
+          func stageAI4KResult(localData, src string) (string, error) {
+          	dir := ai4KPendingDir(localData)
+          	if err := os.MkdirAll(dir, 0o755); err != nil {
+          		return "", err
+          	}
+          	f, err := os.CreateTemp(dir, "nightview-ai4k-*.png")
+          	if err != nil {
+          		return "", err
+          	}
+          	dst := f.Name()
+          	if err := f.Close(); err != nil {
+          		_ = os.Remove(dst)
+          		return "", err
+          	}
+          	_ = os.Remove(dst)
+          	if err := copyFileExclusive(src, dst); err != nil {
+          		return "", err
+          	}
+          	if err := validateAIUpscaleOutput(dst); err != nil {
+          		_ = os.Remove(dst)
+          		return "", err
+          	}
+          	return dst, nil
+          }
+          
+          func utf16DialogString(s string) []uint16 {
+          	out := utf16.Encode([]rune(s))
+          	return append(out, 0)
+          }
+          
+          func (a *viewerApp) chooseAI4KSavePath(input string) (string, bool) {
+          	filter := utf16DialogString("PNG 이미지 (*.png)\x00*.png\x00모든 파일 (*.*)\x00*.*\x00\x00")
+          	title := mustUTF16("AI 4K 결과를 다른 이름으로 저장")
+          	defExt := mustUTF16("png")
+          	initialDir := mustUTF16(filepath.Dir(input))
+          
+          	for {
+          		buf := make([]uint16, 32768)
+          		initialName := utf16DialogString(nextAIOutputPath(input, 4))
+          		copy(buf, initialName)
+          
+          		ofn := OPENFILENAME{
+          			LStructSize:    uint32(unsafe.Sizeof(OPENFILENAME{})),
+          			HwndOwner:      a.hwnd,
+          			LpstrFilter:    &filter[0],
+          			NFilterIndex:   1,
+          			LpstrFile:      &buf[0],
+          			NMaxFile:       uint32(len(buf)),
+          			LpstrInitialDir: initialDir,
+          			LpstrTitle:     title,
+          			Flags:          OFN_PATHMUSTEXIST | OFN_EXPLORER | aiOFNOverwritePrompt,
+          			LpstrDefExt:    defExt,
+          		}
+          		if r, _, _ := pGetSaveFileNameAI.Call(uintptr(unsafe.Pointer(&ofn))); r == 0 {
+          			return "", false
+          		}
+          		target := filepath.Clean(syscall.UTF16ToString(buf))
+          		if filepath.Ext(target) == "" {
+          			target += ".png"
+          		}
+          		if !strings.EqualFold(filepath.Ext(target), ".png") {
+          			messageBox(a.hwnd, "AI 4K 결과는 PNG 파일로 저장됩니다.\n\n파일 확장자를 .png로 지정해주세요.", "NightView AI 4K", MB_OK|MB_ICONINFO)
+          			continue
+          		}
+          		if strings.EqualFold(filepath.Clean(target), filepath.Clean(input)) {
+          			messageBox(a.hwnd, "원본과 같은 경로는 '다른 이름으로 저장'에 사용할 수 없습니다.\n\n원본에 저장하려면 '원본에 덮어쓰기'를 선택해주세요.", "NightView AI 4K", MB_OK|MB_ICONINFO)
+          			continue
+          		}
+          		return target, true
+          	}
+          }
+          
+          func (a *viewerApp) restoreTitleAfterAIChoice() {
+          	if a.currentPath != "" {
+          		a.setTitle(filepath.Base(a.currentPath) + " — NightView")
+          	} else {
+          		a.setTitle("NightView")
+          	}
+          }
+          
+          func moveFileReplace(src, dst string) error {
+          	src16, err := syscall.UTF16PtrFromString(src)
+          	if err != nil {
+          		return err
+          	}
+          	dst16, err := syscall.UTF16PtrFromString(dst)
+          	if err != nil {
+          		return err
+          	}
+          	r, _, callErr := pMoveFileExAI.Call(
+          		uintptr(unsafe.Pointer(src16)),
+          		uintptr(unsafe.Pointer(dst16)),
+          		aiMoveReplace|aiMoveWriteThrough,
+          	)
+          	if r == 0 {
+          		return callErr
+          	}
+          	return nil
+          }
+          
+          func atomicCopyPNG(src, dst string) error {
+          	if !strings.EqualFold(filepath.Ext(dst), ".png") {
+          		return errors.New("destination must use .png")
+          	}
+          	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+          		return err
+          	}
+          	f, err := os.CreateTemp(filepath.Dir(dst), ".nightview-save-*.png")
+          	if err != nil {
+          		return err
+          	}
+          	tmp := f.Name()
+          	if err := f.Close(); err != nil {
+          		_ = os.Remove(tmp)
+          		return err
+          	}
+          	_ = os.Remove(tmp)
+          	if err := copyFileExclusive(src, tmp); err != nil {
+          		return err
+          	}
+          	ok := false
+          	defer func() {
+          		if !ok {
+          			_ = os.Remove(tmp)
+          		}
+          	}()
+          	if err := validateAIUpscaleOutput(tmp); err != nil {
+          		return err
+          	}
+          	if err := moveFileReplace(tmp, dst); err != nil {
+          		return err
+          	}
+          	ok = true
+          	return nil
+          }
+          
+          func saveAI4KAsPNG(src, dst string) error {
+          	return atomicCopyPNG(src, dst)
+          }
+          
+          func overwriteAI4KOriginal(src, original string) error {
+          	switch strings.ToLower(filepath.Ext(original)) {
+          	case ".png":
+          		return atomicCopyPNG(src, original)
+          	case ".jpg", ".jpeg", ".jpe", ".jfif":
+          		return overwriteAI4KJPEG(src, original)
+          	default:
+          		return fmt.Errorf("지원하지 않는 원본 형식입니다: %s", filepath.Ext(original))
+          	}
+          }
+          
+          func overwriteAI4KJPEG(src, original string) error {
+          	in, err := os.Open(src)
+          	if err != nil {
+          		return err
+          	}
+          	img, err := png.Decode(in)
+          	_ = in.Close()
+          	if err != nil {
+          		return fmt.Errorf("AI PNG 읽기 실패: %w", err)
+          	}
+          
+          	f, err := os.CreateTemp(filepath.Dir(original), ".nightview-overwrite-*.jpg")
+          	if err != nil {
+          		return err
+          	}
+          	tmp := f.Name()
+          	ok := false
+          	defer func() {
+          		_ = f.Close()
+          		if !ok {
+          			_ = os.Remove(tmp)
+          		}
+          	}()
+          	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 100}); err != nil {
+          		return fmt.Errorf("JPEG 변환 실패: %w", err)
+          	}
+          	if err := f.Sync(); err != nil {
+          		return err
+          	}
+          	if err := f.Close(); err != nil {
+          		return err
+          	}
+          	cfg, format, err := imageConfig(tmp)
+          	if err != nil {
+          		return err
+          	}
+          	if format != "jpeg" || cfg.Width <= 0 || cfg.Height <= 0 {
+          		return errors.New("변환된 JPEG 검증 실패")
+          	}
+          	if err := moveFileReplace(tmp, original); err != nil {
+          		return err
+          	}
+          	ok = true
+          	return nil
+          }
+          '@
           [IO.File]::WriteAllText((Join-Path $PWD 'ai_save_windows.go'), $helper, (New-Object Text.UTF8Encoding($false)))
 
           $tests = @'
-//go:build windows
-
-package main
-
-import (
-	"image"
-	"image/color"
-	"image/jpeg"
-	"image/png"
-	"os"
-	"path/filepath"
-	"testing"
-)
-
-func writeAI4KTestPNG(t *testing.T, path string, w, h int, c color.Color) {
-	t.Helper()
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			img.Set(x, y, c)
-		}
-	}
-	if err := png.Encode(f, img); err != nil {
-		_ = f.Close()
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeAI4KTestJPEG(t *testing.T, path string, w, h int) {
-	t.Helper()
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 90}); err != nil {
-		_ = f.Close()
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestStageAI4KResultUsesAppDataArea(t *testing.T) {
-	root := t.TempDir()
-	sourceDir := filepath.Join(root, "source")
-	localData := filepath.Join(root, "local")
-	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	src := filepath.Join(sourceDir, "result.png")
-	writeAI4KTestPNG(t, src, 16, 12, color.RGBA{R: 255, A: 255})
-	got, err := stageAI4KResult(localData, src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(got)
-	if filepath.Dir(got) != ai4KPendingDir(localData) {
-		t.Fatalf("pending result stored in wrong directory: %s", got)
-	}
-	if filepath.Dir(got) == sourceDir {
-		t.Fatal("4K pending result was written next to the original")
-	}
-}
-
-func TestSaveAI4KAsPNGPreservesOriginal(t *testing.T) {
-	d := t.TempDir()
-	result := filepath.Join(d, "pending.png")
-	original := filepath.Join(d, "original.png")
-	dst := filepath.Join(d, "saved.png")
-	writeAI4KTestPNG(t, result, 20, 10, color.RGBA{G: 255, A: 255})
-	writeAI4KTestPNG(t, original, 5, 5, color.RGBA{R: 255, A: 255})
-	before, err := os.ReadFile(original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := saveAI4KAsPNG(result, dst); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.ReadFile(original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Fatal("save-as modified the original")
-	}
-	cfg, format, err := imageConfig(dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if format != "png" || cfg.Width != 20 || cfg.Height != 10 {
-		t.Fatalf("unexpected saved output: format=%s size=%dx%d", format, cfg.Width, cfg.Height)
-	}
-}
-
-func TestOverwriteAI4KOriginalPNG(t *testing.T) {
-	d := t.TempDir()
-	result := filepath.Join(d, "pending.png")
-	original := filepath.Join(d, "original.png")
-	writeAI4KTestPNG(t, result, 24, 16, color.RGBA{B: 255, A: 255})
-	writeAI4KTestPNG(t, original, 6, 4, color.RGBA{R: 255, A: 255})
-	if err := overwriteAI4KOriginal(result, original); err != nil {
-		t.Fatal(err)
-	}
-	cfg, format, err := imageConfig(original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if format != "png" || cfg.Width != 24 || cfg.Height != 16 {
-		t.Fatalf("unexpected overwritten PNG: format=%s size=%dx%d", format, cfg.Width, cfg.Height)
-	}
-}
-
-func TestOverwriteAI4KOriginalJPEGKeepsJPEGFormat(t *testing.T) {
-	d := t.TempDir()
-	result := filepath.Join(d, "pending.png")
-	original := filepath.Join(d, "original.jpg")
-	writeAI4KTestPNG(t, result, 28, 20, color.RGBA{G: 220, B: 100, A: 255})
-	writeAI4KTestJPEG(t, original, 7, 5)
-	if err := overwriteAI4KOriginal(result, original); err != nil {
-		t.Fatal(err)
-	}
-	cfg, format, err := imageConfig(original)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if format != "jpeg" || cfg.Width != 28 || cfg.Height != 20 {
-		t.Fatalf("unexpected overwritten JPEG: format=%s size=%dx%d", format, cfg.Width, cfg.Height)
-	}
-}
-'@
+          //go:build windows
+          
+          package main
+          
+          import (
+          	"image"
+          	"image/color"
+          	"image/jpeg"
+          	"image/png"
+          	"os"
+          	"path/filepath"
+          	"testing"
+          )
+          
+          func writeAI4KTestPNG(t *testing.T, path string, w, h int, c color.Color) {
+          	t.Helper()
+          	f, err := os.Create(path)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	img := image.NewRGBA(image.Rect(0, 0, w, h))
+          	for y := 0; y < h; y++ {
+          		for x := 0; x < w; x++ {
+          			img.Set(x, y, c)
+          		}
+          	}
+          	if err := png.Encode(f, img); err != nil {
+          		_ = f.Close()
+          		t.Fatal(err)
+          	}
+          	if err := f.Close(); err != nil {
+          		t.Fatal(err)
+          	}
+          }
+          
+          func writeAI4KTestJPEG(t *testing.T, path string, w, h int) {
+          	t.Helper()
+          	f, err := os.Create(path)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	img := image.NewRGBA(image.Rect(0, 0, w, h))
+          	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 90}); err != nil {
+          		_ = f.Close()
+          		t.Fatal(err)
+          	}
+          	if err := f.Close(); err != nil {
+          		t.Fatal(err)
+          	}
+          }
+          
+          func TestStageAI4KResultUsesAppDataArea(t *testing.T) {
+          	root := t.TempDir()
+          	sourceDir := filepath.Join(root, "source")
+          	localData := filepath.Join(root, "local")
+          	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+          		t.Fatal(err)
+          	}
+          	src := filepath.Join(sourceDir, "result.png")
+          	writeAI4KTestPNG(t, src, 16, 12, color.RGBA{R: 255, A: 255})
+          	got, err := stageAI4KResult(localData, src)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	defer os.Remove(got)
+          	if filepath.Dir(got) != ai4KPendingDir(localData) {
+          		t.Fatalf("pending result stored in wrong directory: %s", got)
+          	}
+          	if filepath.Dir(got) == sourceDir {
+          		t.Fatal("4K pending result was written next to the original")
+          	}
+          }
+          
+          func TestSaveAI4KAsPNGPreservesOriginal(t *testing.T) {
+          	d := t.TempDir()
+          	result := filepath.Join(d, "pending.png")
+          	original := filepath.Join(d, "original.png")
+          	dst := filepath.Join(d, "saved.png")
+          	writeAI4KTestPNG(t, result, 20, 10, color.RGBA{G: 255, A: 255})
+          	writeAI4KTestPNG(t, original, 5, 5, color.RGBA{R: 255, A: 255})
+          	before, err := os.ReadFile(original)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if err := saveAI4KAsPNG(result, dst); err != nil {
+          		t.Fatal(err)
+          	}
+          	after, err := os.ReadFile(original)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if string(before) != string(after) {
+          		t.Fatal("save-as modified the original")
+          	}
+          	cfg, format, err := imageConfig(dst)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if format != "png" || cfg.Width != 20 || cfg.Height != 10 {
+          		t.Fatalf("unexpected saved output: format=%s size=%dx%d", format, cfg.Width, cfg.Height)
+          	}
+          }
+          
+          func TestOverwriteAI4KOriginalPNG(t *testing.T) {
+          	d := t.TempDir()
+          	result := filepath.Join(d, "pending.png")
+          	original := filepath.Join(d, "original.png")
+          	writeAI4KTestPNG(t, result, 24, 16, color.RGBA{B: 255, A: 255})
+          	writeAI4KTestPNG(t, original, 6, 4, color.RGBA{R: 255, A: 255})
+          	if err := overwriteAI4KOriginal(result, original); err != nil {
+          		t.Fatal(err)
+          	}
+          	cfg, format, err := imageConfig(original)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if format != "png" || cfg.Width != 24 || cfg.Height != 16 {
+          		t.Fatalf("unexpected overwritten PNG: format=%s size=%dx%d", format, cfg.Width, cfg.Height)
+          	}
+          }
+          
+          func TestOverwriteAI4KOriginalJPEGKeepsJPEGFormat(t *testing.T) {
+          	d := t.TempDir()
+          	result := filepath.Join(d, "pending.png")
+          	original := filepath.Join(d, "original.jpg")
+          	writeAI4KTestPNG(t, result, 28, 20, color.RGBA{G: 220, B: 100, A: 255})
+          	writeAI4KTestJPEG(t, original, 7, 5)
+          	if err := overwriteAI4KOriginal(result, original); err != nil {
+          		t.Fatal(err)
+          	}
+          	cfg, format, err := imageConfig(original)
+          	if err != nil {
+          		t.Fatal(err)
+          	}
+          	if format != "jpeg" || cfg.Width != 28 || cfg.Height != 20 {
+          		t.Fatalf("unexpected overwritten JPEG: format=%s size=%dx%d", format, cfg.Width, cfg.Height)
+          	}
+          }
+          '@
           [IO.File]::WriteAllText((Join-Path $PWD 'ai_save_windows_test.go'), $tests, (New-Object Text.UTF8Encoding($false)))
 
           gofmt -w ai_windows.go ai_save_windows.go ai_save_windows_test.go
