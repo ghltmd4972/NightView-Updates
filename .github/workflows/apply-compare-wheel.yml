@@ -1,0 +1,288 @@
+name: Apply NightView comparison wheel refinement
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-compare-wheel.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-compare-wheel-apply
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct current staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -eq 0) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-stage.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-stage.tar.gz -C buildsrc
+
+      - name: Add divider wheel control
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $mainPath = 'main_windows.go'
+          $main = Get-Content $mainPath -Raw
+
+          if ($main.Contains('a.onAICompareMouseWheel(delta, p)')) {
+            throw 'Comparison wheel hook already exists; refusing duplicate patch.'
+          }
+          $wheelAnchor = @'
+          func (a *viewerApp) onMouseWheel(delta int, p POINT) {
+                  if a.image == nil {
+                          return
+                  }
+          '@
+          $wheelReplace = @'
+          func (a *viewerApp) onMouseWheel(delta int, p POINT) {
+                  if a.image == nil {
+                          return
+                  }
+                  if a.onAICompareMouseWheel(delta, p) {
+                          return
+                  }
+          '@
+          if (-not $main.Contains($wheelAnchor)) {
+            throw 'Expected onMouseWheel anchor not found.'
+          }
+          $main = $main.Replace($wheelAnchor, $wheelReplace)
+
+          $statusOld = 'rt += fmt.Sprintf("    비교 %.0f%%  ←/→ 조절 · Home 중앙", a.aiComparisonSplit()*100)'
+          $statusNew = 'rt += fmt.Sprintf("    비교 %.0f%%  ←/→ 조절 · 분할선 휠 · Home 중앙", a.aiComparisonSplit()*100)'
+          if (-not $main.Contains($statusOld)) {
+            throw 'Expected comparison status hint not found.'
+          }
+          $main = $main.Replace($statusOld, $statusNew)
+          [IO.File]::WriteAllText((Join-Path $PWD $mainPath), $main, (New-Object Text.UTF8Encoding($false)))
+
+          $comparePath = 'comparison_windows.go'
+          $compare = Get-Content $comparePath -Raw
+          if ($compare.Contains('func (a *viewerApp) onAICompareMouseWheel(')) {
+            throw 'Comparison wheel method already exists; refusing duplicate patch.'
+          }
+
+          $stateOld = @'
+          type aiCompareState struct {
+                  candidate aiCompareCandidate
+                  active    bool
+                  original  *imageAsset
+                  split     float64
+                  dragging  bool
+          }
+          '@
+          $stateNew = @'
+          type aiCompareState struct {
+                  candidate  aiCompareCandidate
+                  active     bool
+                  original   *imageAsset
+                  split      float64
+                  dragging   bool
+                  wheelAccum int
+          }
+          '@
+          if (-not $compare.Contains($stateOld)) {
+            throw 'Expected aiCompareState block not found.'
+          }
+          $compare = $compare.Replace($stateOld, $stateNew)
+
+          $startOld = @'
+                  aiCompare.active = true
+                  aiCompare.split = 0.5
+                  aiCompare.dragging = false
+          '@
+          $startNew = @'
+                  aiCompare.active = true
+                  aiCompare.split = 0.5
+                  aiCompare.dragging = false
+                  aiCompare.wheelAccum = 0
+          '@
+          if (-not $compare.Contains($startOld)) {
+            throw 'Expected comparison start state not found.'
+          }
+          $compare = $compare.Replace($startOld, $startNew)
+
+          $endOld = @'
+                  aiCompare.dragging = false
+                  aiCompare.active = false
+          '@
+          $endNew = @'
+                  aiCompare.dragging = false
+                  aiCompare.wheelAccum = 0
+                  aiCompare.active = false
+          '@
+          if (-not $compare.Contains($endOld)) {
+            throw 'Expected comparison end state not found.'
+          }
+          $compare = $compare.Replace($endOld, $endNew)
+
+          $anchor = 'func (a *viewerApp) resetAIComparisonSplit() bool {'
+          if ([regex]::Matches($compare, [regex]::Escape($anchor)).Count -ne 1) {
+            throw 'Expected exactly one resetAIComparisonSplit anchor.'
+          }
+          $method = @'
+          func (a *viewerApp) onAICompareMouseWheel(delta int, p POINT) bool {
+                  if !aiCompare.active {
+                          return false
+                  }
+                  if !a.compareDividerNear(p) {
+                          aiCompare.wheelAccum = 0
+                          return false
+                  }
+
+                  var steps int
+                  aiCompare.wheelAccum, steps = accumulateCompareWheel(aiCompare.wheelAccum, delta)
+                  if steps != 0 {
+                          next := stepCompareSplit(aiCompare.split, float64(steps)*0.02)
+                          if next != aiCompare.split {
+                                  aiCompare.split = next
+                                  a.invalidate()
+                          }
+                  }
+                  return true
+          }
+
+          func (a *viewerApp) resetAIComparisonSplit() bool {
+          '@
+          $compare = $compare.Replace($anchor, $method)
+          [IO.File]::WriteAllText((Join-Path $PWD $comparePath), $compare, (New-Object Text.UTF8Encoding($false)))
+
+          $corePath = 'comparison_core.go'
+          $core = Get-Content $corePath -Raw
+          if ($core.Contains('func accumulateCompareWheel(')) {
+            throw 'accumulateCompareWheel already exists; refusing duplicate patch.'
+          }
+          $core += @'
+
+          func accumulateCompareWheel(accum, delta int) (remaining, steps int) {
+                  const wheelDelta = 120
+                  accum += delta
+                  for accum >= wheelDelta {
+                          steps++
+                          accum -= wheelDelta
+                  }
+                  for accum <= -wheelDelta {
+                          steps--
+                          accum += wheelDelta
+                  }
+                  return accum, steps
+          }
+          '@
+          [IO.File]::WriteAllText((Join-Path $PWD $corePath), $core, (New-Object Text.UTF8Encoding($false)))
+
+          $testPath = 'comparison_core_test.go'
+          $tests = Get-Content $testPath -Raw
+          if ($tests.Contains('func TestAccumulateCompareWheel(')) {
+            throw 'Wheel accumulator test already exists; refusing duplicate patch.'
+          }
+          $tests += @'
+
+          func TestAccumulateCompareWheel(t *testing.T) {
+                  rem, steps := accumulateCompareWheel(0, 60)
+                  if rem != 60 || steps != 0 {
+                          t.Fatalf("partial positive: rem=%d steps=%d", rem, steps)
+                  }
+                  rem, steps = accumulateCompareWheel(rem, 60)
+                  if rem != 0 || steps != 1 {
+                          t.Fatalf("full positive: rem=%d steps=%d", rem, steps)
+                  }
+                  rem, steps = accumulateCompareWheel(0, -240)
+                  if rem != 0 || steps != -2 {
+                          t.Fatalf("double negative: rem=%d steps=%d", rem, steps)
+                  }
+                  rem, steps = accumulateCompareWheel(30, 210)
+                  if rem != 0 || steps != 2 {
+                          t.Fatalf("combined positive: rem=%d steps=%d", rem, steps)
+                  }
+          }
+          '@
+          [IO.File]::WriteAllText((Join-Path $PWD $testPath), $tests, (New-Object Text.UTF8Encoding($false)))
+
+          gofmt -w main_windows.go comparison_windows.go comparison_core.go comparison_core_test.go
+
+          $mainCheck = Get-Content 'main_windows.go' -Raw
+          $compareCheck = Get-Content 'comparison_windows.go' -Raw
+          $coreCheck = Get-Content 'comparison_core.go' -Raw
+          if ([regex]::Matches($mainCheck, 'a\.onAICompareMouseWheel\(delta, p\)').Count -ne 1) { throw 'Wheel hook verification failed.' }
+          if ([regex]::Matches($compareCheck, 'func \(a \*viewerApp\) onAICompareMouseWheel').Count -ne 1) { throw 'Wheel method verification failed.' }
+          if (-not $mainCheck.Contains('분할선 휠')) { throw 'Wheel status hint verification failed.' }
+          if ([regex]::Matches($coreCheck, 'func accumulateCompareWheel').Count -ne 1) { throw 'Wheel accumulator verification failed.' }
+
+      - name: Build prerequisites and verify
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.0-dev" -o ..\NightView-1.6.0-dev.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView-1.6.0-dev.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+          go test -count=1 ./...
+          go vet -unsafeptr=false ./...
+          if ((Get-Item ..\NightView-1.6.0-dev.exe).Length -le 0) { throw 'NightView candidate is empty.' }
+          $hash = (Get-FileHash ..\NightView-1.6.0-dev.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "NightView 1.6 dev SHA-256: $hash"
+
+      - name: Repack verified staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-next.tar.gz *
+          Pop-Location
+          $hash = (Get-FileHash 'nightview-source-next.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "New staged source SHA-256: $hash"
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6.txt' -Encoding ascii
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-next.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Wrote $index source chunks."
+
+      - name: Commit verified staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current STAGED_SOURCE_SHA256_1_6.txt
+          if (git diff --cached --quiet) { throw 'No staged source changes were produced.' }
+          git commit -m 'Add mouse wheel control for AI comparison divider'
+          git push
