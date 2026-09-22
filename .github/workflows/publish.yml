@@ -37,12 +37,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -d '' chunks < <(find source/current -maxdepth 1 -type f -name 'chunk_*.b64' -print0 | sort -z -V)
-          if [ "${#chunks[@]}" -eq 0 ]; then
-            echo "No source chunks found."
-            exit 1
-          fi
-          cat "${chunks[@]}" > source.b64
+          cat source/current/chunk_*.b64 > source.b64
           base64 -d source.b64 > nightview-source.tar.gz
           sha256sum -c SOURCE_SHA256.txt
           mkdir buildsrc
@@ -82,145 +77,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object {
-            $m = [regex]::Match($_.BaseName, '(\d+)
-          [IO.File]::WriteAllText((Join-Path $PWD 'source.b64'), $text, [Text.Encoding]::ASCII)
-          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
-          $line = (Get-Content SOURCE_SHA256.txt -Raw).Trim()
-          $expected = ($line -split '\s+')[0].ToLowerInvariant()
-          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw "Source SHA-256 mismatch: $actual != $expected" }
-          New-Item -ItemType Directory -Force buildsrc | Out-Null
-          tar -xzf nightview-source.tar.gz -C buildsrc
-
-      - name: Build exact Windows release candidates and fixtures
-        shell: pwsh
-        working-directory: buildsrc
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = (Get-Content ..\VERSION -Raw).Trim()
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=$version" -o ..\NightView.exe .
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
-          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
-          Copy-Item ..\NightView.exe .\installer\payload\NightView.exe -Force
-          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
-
-      - name: Native Windows tests including replacement and rollback
-        shell: pwsh
-        working-directory: buildsrc
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
-          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
-          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
-          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
-          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
-          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
-          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
-          go test -count=1 -v -run 'TestCompareSplitClamp|TestCompareDimensionRelation|TestAICompareNativeSplitRendering|TestAICache' .
-          go test -count=1 ./...
-          go vet -unsafeptr=false ./...
-
-      - name: Build setup after verified payload
-        shell: pwsh
-        working-directory: buildsrc
-        run: |
-          $ErrorActionPreference = 'Stop'
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewSetup.exe .\installer
-          if ((Get-Item ..\NightView.exe).Length -le 0) { throw 'NightView.exe is empty' }
-          if ((Get-Item ..\NightViewUpdater.exe).Length -le 0) { throw 'NightViewUpdater.exe is empty' }
-          if ((Get-Item ..\NightViewSetup.exe).Length -le 0) { throw 'NightViewSetup.exe is empty' }
-          Get-FileHash ..\NightView.exe -Algorithm SHA256
-          Get-FileHash ..\NightViewUpdater.exe -Algorithm SHA256
-          Get-FileHash ..\NightViewSetup.exe -Algorithm SHA256
-
-      - name: Upload verified Windows binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: nightview-windows-x64
-          if-no-files-found: error
-          retention-days: 7
-          path: |
-            NightView.exe
-            NightViewUpdater.exe
-            NightViewSetup.exe
-
-  publish:
-    needs: [linux-verify, windows-verify-build]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: nightview-windows-x64
-          path: dist
-
-      - name: Publish only after both verification jobs pass
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
-            echo "Repository changed during verification; refusing to publish stale artifacts."
-            exit 1
-          fi
-
-          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
-          OUT="releases/${VERSION_VALUE}"
-          mkdir -p "$OUT"
-          cp dist/NightView.exe dist/NightViewUpdater.exe dist/NightViewSetup.exe "$OUT/"
-          sha256sum "$OUT/NightView.exe" "$OUT/NightViewUpdater.exe" "$OUT/NightViewSetup.exe" > "$OUT/SHA256SUMS.txt"
-
-          python3 - <<'PY'
-          import datetime
-          import hashlib
-          import json
-          import pathlib
-
-          version = pathlib.Path('VERSION').read_text(encoding='utf-8').strip()
-          notes = pathlib.Path('RELEASE_NOTES.txt').read_text(encoding='utf-8').strip()
-          base = f'https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/{version}'
-
-          def artifact(name):
-              path = pathlib.Path('releases') / version / name
-              data = path.read_bytes()
-              return {
-                  'url': f'{base}/{name}',
-                  'sha256': hashlib.sha256(data).hexdigest(),
-                  'size': len(data),
-              }
-
-          manifest = {
-              'schema': 1,
-              'enabled': True,
-              'version': version,
-              'published_at': datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
-              'notes': notes,
-              'nightview': artifact('NightView.exe'),
-              'updater': artifact('NightViewUpdater.exe'),
-          }
-          pathlib.Path('latest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-          PY
-
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add "$OUT" latest.json
-          if git diff --cached --quiet; then
-            echo 'Nothing new to publish.'
-            exit 0
-          fi
-          git commit -m "Publish NightView ${VERSION_VALUE}"
-          git push
-)
-            if (-not $m.Success) { throw "Invalid source chunk filename: $($_.Name)" }
-            [int]$m.Groups[1].Value
-          }
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
           if ($chunks.Count -lt 1) { throw 'No source chunks found.' }
           $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
           [IO.File]::WriteAllText((Join-Path $PWD 'source.b64'), $text, [Text.Encoding]::ASCII)
@@ -247,7 +104,7 @@ jobs:
           Copy-Item ..\NightView.exe .\installer\payload\NightView.exe -Force
           Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
 
-      - name: Native Windows tests including replacement and rollback
+      - name: Native Windows tests including comparison cache replacement and rollback
         shell: pwsh
         working-directory: buildsrc
         run: |
@@ -259,6 +116,7 @@ jobs:
           $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
           $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
           $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+          go test -count=1 -v -run 'TestCompareSplitClamp|TestCompareDimensionRelation|TestAICompareNativeSplitRendering|TestAICache' .
           go test -count=1 ./...
           go vet -unsafeptr=false ./...
 
