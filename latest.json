@@ -1,16 +1,16 @@
 {
   "schema": 1,
   "enabled": true,
-  "version": "1.6.0",
-  "published_at": "2026-09-22T08:53:04Z",
-  "notes": "NightView 1.6.0\n- AI 원본 ↔ 업스케일 결과 비교 UI 개선\n- 비교 모드에서 ← / → 방향키로 분할선을 2%씩 미세 조절\n- Home 키로 분할선을 즉시 50% 중앙으로 복귀\n- 중앙 분할선 근처에서 마우스 휠로 분할선을 2%씩 조절\n- 분할선 밖에서는 기존 NightView 휠 확대·이미지 이동 동작 유지\n- 고해상도 마우스·터치패드의 작은 휠 입력은 Windows 표준 120 델타로 누적 후 이동\n- 비교 시작·종료 시 휠 누적값 초기화\n- 상태표시줄에 ←/→, 분할선 휠, Home 중앙 복귀 조작 안내 표시\n- 기존 AI 업스케일 캐시, 원본 검증, 비교 정렬, 자동 업데이트, 백업 및 실패 롤백 기능 유지",
+  "version": "1.6.1",
+  "published_at": "2026-09-22T09:14:59Z",
+  "notes": "NightView 1.6.1\n- Windows에서 이미지를 더블클릭했을 때 NightView 대신 설치 프로그램이 다시 실행되던 파일 연결 문제 수정\n- 설치 시 JPG/JPEG/JPE/JFIF, PNG, GIF, BMP/DIB, TIFF/TIF, ICO를 설치된 NightView.exe에 연결\n- 기존에 잘못 연결된 NightViewSetup.exe 및 NightViewSetup_1.6.0_Final.exe 계열 연결도 NightView.exe로 호환 복구\n- 파일 연결 등록 후 Windows 셸에 연결 변경 알림을 보내 즉시 반영\n- 설치 완료 창의 버전이 1.4.0으로 고정되어 표시되던 문제 수정\n- 설치 프로그램 버전 표시를 실제 배포 버전과 동일하게 빌드 시 주입\n- 기존 AI 업스케일 캐시, 원본 ↔ AI 비교, 자동 업데이트, 백업 및 실패 롤백 기능 유지",
   "nightview": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.0/NightView.exe",
-    "sha256": "0c5f534a9dee1c138ca9b030979827b2164f7679ea33537575998a56e9ea6e0f",
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.1/NightView.exe",
+    "sha256": "993675113babce738ca6172bbaf39682dbdd23d52c4832fe2b227c34b43d1947",
     "size": 6334976
   },
   "updater": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.0/NightViewUpdater.exe",
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.1/NightViewUpdater.exe",
     "sha256": "73dfe20c37789b1535394635454aaf055ef86ca072026ffa13e67775c8d4a7e0",
     "size": 2114560
   }
