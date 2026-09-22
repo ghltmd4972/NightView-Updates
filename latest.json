@@ -1,16 +1,16 @@
 {
   "schema": 1,
   "enabled": true,
-  "version": "1.6.5",
-  "published_at": "2026-09-22T10:51:27Z",
-  "notes": "NightView 1.6.5\n- 전체화면에서는 상단 툴바를 기본적으로 숨김\n- 마우스를 화면 최상단에 가져가면 기존 열기/폴더/이전/다음/맞춤/폭/높이/100%/전체화면 툴바가 자동 표시\n- 마우스가 툴바 아래로 벗어나면 툴바를 다시 자동 숨김\n- 전체화면 툴바는 이미지 위에 오버레이되어 이미지 표시 영역과 확대/위치가 변하지 않음\n- 표시된 전체화면 툴바의 버튼은 기존과 동일하게 클릭 가능\n- NightView 1.6.4 AI 4K 저장 선택 기능 및 기존 업데이트/롤백 동작 유지",
+  "version": "1.6.6",
+  "published_at": "2026-09-22T11:20:59Z",
+  "notes": "NightView 1.6.6\n- 전체화면 상단 자동 툴바 오른쪽에 최소화 / 복원 / 닫기 버튼 추가\n- 닫기 버튼은 마우스를 올리면 빨간색으로 표시\n- 복원 버튼으로 전체화면에서 일반 창으로 즉시 복귀\n- AI 4K 결과를 원본에 덮어써도 덮어쓰기 전 원본을 비교 전용 임시 스냅샷으로 보존\n- AI 4K 원본 덮어쓰기 후에도 C 키로 원본과 4K 결과 비교 가능\n- 비교용 임시 원본은 새 비교 대상이 생기거나 NightView 종료 시 자동 정리\n- 다른 이름으로 저장한 AI 결과의 기존 원본 비교 기능 유지\n- NightView 1.6.5 상단 자동 툴바 및 기존 업데이트/롤백 기능 유지",
   "nightview": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.5/NightView.exe",
-    "sha256": "5b968c88969830c3fa49ce78929413ab9fdc1b7f34aac387ff40a7f701c11946",
-    "size": 6375936
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.6/NightView.exe",
+    "sha256": "ab91087804193f6f29b23930051e07a76a2c0eb7bdb94dd390b967b15d704cc0",
+    "size": 6381056
   },
   "updater": {
-    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.5/NightViewUpdater.exe",
+    "url": "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/1.6.6/NightViewUpdater.exe",
     "sha256": "73dfe20c37789b1535394635454aaf055ef86ca072026ffa13e67775c8d4a7e0",
     "size": 2114560
   }
