@@ -18,21 +18,32 @@ jobs:
       - name: Reconstruct source
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
           $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
           [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-source.tar.gz -C buildsrc
-      - name: Print exact viewer ranges
+      - name: Inspect startup and update code
         shell: pwsh
         working-directory: buildsrc
         run: |
-          $lines = Get-Content main_windows.go
-          Write-Host '=== MAIN 430-540 ==='
-          for ($i=429; $i -lt [Math]::Min(540,$lines.Count); $i++) { Write-Host ("{0}: {1}" -f ($i+1),$lines[$i]) }
-          Write-Host '=== MAIN 620-790 ==='
-          for ($i=619; $i -lt [Math]::Min(790,$lines.Count); $i++) { Write-Host ("{0}: {1}" -f ($i+1),$lines[$i]) }
-          Write-Host '=== MAIN 810-960 ==='
-          for ($i=809; $i -lt [Math]::Min(960,$lines.Count); $i++) { Write-Host ("{0}: {1}" -f ($i+1),$lines[$i]) }
-          Write-Host '=== MAIN 960-1130 ==='
-          for ($i=959; $i -lt [Math]::Min(1130,$lines.Count); $i++) { Write-Host ("{0}: {1}" -f ($i+1),$lines[$i]) }
+          $ErrorActionPreference = 'Stop'
+          Write-Host '=== GO FILES ==='
+          Get-ChildItem -Recurse -Filter *.go | ForEach-Object { Write-Host $_.FullName.Replace((Get-Location).Path + '\\','') }
+
+          Write-Host '=== STARTUP / WINDOW MATCHES ==='
+          Get-ChildItem -Recurse -Filter *.go | Select-String -Pattern 'ShowWindow|SW_SHOW|SW_MAX|CreateWindow|SetWindowPos|WINDOWPLACEMENT|nCmdShow|showCmd|maximiz|fullscreen|full screen' -CaseSensitive:$false -Context 8,12 | ForEach-Object {
+            Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
+
+          Write-Host '=== UPDATE MATCHES ==='
+          Get-ChildItem -Recurse -Filter *.go | Select-String -Pattern 'update|updater|latest.json|CreateProcess|restart|rollback|backup|NightViewUpdater' -CaseSensitive:$false -Context 6,10 | ForEach-Object {
+            Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
