@@ -125,6 +125,7 @@ jobs:
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
+          $version = (Get-Content ..\VERSION -Raw).Trim()
           go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.installerVersion=$version" -o ..\NightViewSetup.exe .\installer
           if ((Get-Item ..\NightView.exe).Length -le 0) { throw 'NightView.exe is empty' }
           if ((Get-Item ..\NightViewUpdater.exe).Length -le 0) { throw 'NightViewUpdater.exe is empty' }
