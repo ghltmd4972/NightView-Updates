@@ -1,0 +1,78 @@
+name: Verify NightView comparison stage
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/verify-compare.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightview-compare-verify
+  cancel-in-progress: true
+
+jobs:
+  windows-compare-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -eq 0) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-stage.tar.gz'), [Convert]::FromBase64String($text))
+          $hash = (Get-FileHash 'nightview-stage.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Staged source SHA-256: $hash"
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-stage.tar.gz -C buildsrc
+
+      - name: Build AI fixture for integration tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+          "NIGHTVIEW_AI_FIXTURE=$env:NIGHTVIEW_AI_FIXTURE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run staged Windows tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go test -count=1 ./...
+          go vet -unsafeptr=false ./...
+
+      - name: Build comparison release candidate
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.5.0-dev" -o ..\NightView-1.5.0-dev.exe .
+          if ((Get-Item ..\NightView-1.5.0-dev.exe).Length -le 0) { throw 'NightView candidate is empty.' }
+          $hash = (Get-FileHash ..\NightView-1.5.0-dev.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "NightView candidate SHA-256: $hash"
+
+      - name: Upload verified candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: NightView-1.5.0-comparison-stage
+          if-no-files-found: error
+          retention-days: 3
+          path: NightView-1.5.0-dev.exe
