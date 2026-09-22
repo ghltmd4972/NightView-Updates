@@ -1,0 +1,185 @@
+name: Apply NightView comparison center reset
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-compare-center-reset.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-compare-center-reset
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct current staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -eq 0) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-stage.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-stage.tar.gz -C buildsrc
+
+      - name: Add Home reset and visible comparison hint
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nl = [Environment]::NewLine
+
+          $mainPath = 'main_windows.go'
+          $main = Get-Content $mainPath -Raw
+
+          if ([regex]::Matches($main, '(?m)^\s*VK_HOME\s*=').Count -ne 0) {
+            throw 'VK_HOME already exists; refusing duplicate patch.'
+          }
+          $constPattern = '(?m)^(\s*VK_SPACE\s*=\s*0x20\s*\r?\n)'
+          if ([regex]::Matches($main, $constPattern).Count -ne 1) {
+            throw 'Expected exactly one VK_SPACE constant anchor.'
+          }
+          $main = [regex]::Replace(
+            $main,
+            $constPattern,
+            { param($m) $m.Groups[1].Value + [char]9 + 'VK_HOME                             = 0x24' + $nl },
+            1
+          )
+
+          if ([regex]::Matches($main, '(?m)^\s*case VK_HOME:').Count -ne 0) {
+            throw 'VK_HOME case already exists; refusing duplicate patch.'
+          }
+          $leftPattern = '(?m)^(\s*)case VK_LEFT:\s*\r?\n'
+          if ([regex]::Matches($main, $leftPattern).Count -ne 1) {
+            throw 'Expected exactly one VK_LEFT case anchor.'
+          }
+          $main = [regex]::Replace(
+            $main,
+            $leftPattern,
+            {
+              param($m)
+              $indent = $m.Groups[1].Value
+              return $indent + 'case VK_HOME:' + $nl +
+                     $indent + [char]9 + 'if a.resetAIComparisonSplit() {' + $nl +
+                     $indent + [char]9 + [char]9 + 'return' + $nl +
+                     $indent + [char]9 + '}' + $nl +
+                     $indent + 'case VK_LEFT:' + $nl
+            },
+            1
+          )
+
+          $statusOld = 'rt += fmt.Sprintf("    비교 %.0f%%", a.aiComparisonSplit()*100)'
+          $statusNew = 'rt += fmt.Sprintf("    비교 %.0f%%  ←/→ 조절 · Home 중앙", a.aiComparisonSplit()*100)'
+          if (-not $main.Contains($statusOld)) {
+            throw 'Expected comparison status text not found.'
+          }
+          $main = $main.Replace($statusOld, $statusNew)
+          [IO.File]::WriteAllText((Join-Path $PWD $mainPath), $main, (New-Object Text.UTF8Encoding($false)))
+
+          $comparePath = 'comparison_windows.go'
+          $compare = Get-Content $comparePath -Raw
+          if ($compare.Contains('func (a *viewerApp) resetAIComparisonSplit() bool')) {
+            throw 'Reset method already exists; refusing duplicate patch.'
+          }
+          $anchor = 'var _ = syscall.Errno(0)'
+          if ([regex]::Matches($compare, [regex]::Escape($anchor)).Count -ne 1) {
+            throw 'Expected exactly one comparison Windows anchor.'
+          }
+          $method = @'
+          func (a *viewerApp) resetAIComparisonSplit() bool {
+                  if !aiCompare.active {
+                          return false
+                  }
+                  if aiCompare.split != 0.5 {
+                          aiCompare.split = 0.5
+                          a.invalidate()
+                  }
+                  return true
+          }
+
+          var _ = syscall.Errno(0)
+          '@
+          $compare = $compare.Replace($anchor, $method)
+          [IO.File]::WriteAllText((Join-Path $PWD $comparePath), $compare, (New-Object Text.UTF8Encoding($false)))
+
+          gofmt -w main_windows.go comparison_windows.go
+
+          $mainCheck = Get-Content 'main_windows.go' -Raw
+          $compareCheck = Get-Content 'comparison_windows.go' -Raw
+          if ([regex]::Matches($mainCheck, '(?m)^\s*VK_HOME\s*=\s*0x24').Count -ne 1) { throw 'VK_HOME constant verification failed.' }
+          if ([regex]::Matches($mainCheck, '(?m)^\s*case VK_HOME:').Count -ne 1) { throw 'VK_HOME case verification failed.' }
+          if (-not $mainCheck.Contains('←/→ 조절 · Home 중앙')) { throw 'Comparison hint verification failed.' }
+          if ([regex]::Matches($compareCheck, 'func \(a \*viewerApp\) resetAIComparisonSplit\(\) bool').Count -ne 1) { throw 'Reset method verification failed.' }
+
+      - name: Build prerequisites and verify
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.0-dev" -o ..\NightView-1.6.0-dev.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView-1.6.0-dev.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+          go test -count=1 ./...
+          go vet -unsafeptr=false ./...
+          if ((Get-Item ..\NightView-1.6.0-dev.exe).Length -le 0) { throw 'NightView candidate is empty.' }
+          $hash = (Get-FileHash ..\NightView-1.6.0-dev.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "NightView 1.6 dev SHA-256: $hash"
+
+      - name: Repack verified staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-next.tar.gz *
+          Pop-Location
+          $hash = (Get-FileHash 'nightview-source-next.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "New staged source SHA-256: $hash"
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6.txt' -Encoding ascii
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-next.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Wrote $index source chunks."
+
+      - name: Commit verified staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current STAGED_SOURCE_SHA256_1_6.txt
+          if (git diff --cached --quiet) { throw 'No staged source changes were produced.' }
+          git commit -m 'Add Home reset for AI comparison divider'
+          git push
