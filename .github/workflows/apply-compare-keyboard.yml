@@ -1,0 +1,183 @@
+name: Apply NightView comparison keyboard refinement
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-compare-keyboard.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-compare-keyboard-apply
+  cancel-in-progress: true
+
+jobs:
+  apply-and-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct current staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -eq 0) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-stage.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-stage.tar.gz -C buildsrc
+
+      - name: Add keyboard divider control
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $mainPath = 'main_windows.go'
+          $main = Get-Content $mainPath -Raw
+          $oldKeys = @'
+          switch vk {
+          case VK_LEFT, VK_BACK:
+                  a.navigate(-1)
+          case VK_RIGHT, VK_SPACE:
+                  a.navigate(1)
+          '@
+          $newKeys = @'
+          switch vk {
+          case VK_LEFT:
+                  if a.adjustAIComparisonSplit(-0.02) {
+                          return
+                  }
+                  a.navigate(-1)
+          case VK_BACK:
+                  a.navigate(-1)
+          case VK_RIGHT:
+                  if a.adjustAIComparisonSplit(0.02) {
+                          return
+                  }
+                  a.navigate(1)
+          case VK_SPACE:
+                  a.navigate(1)
+          '@
+          if (-not $main.Contains($oldKeys)) { throw 'Expected keyboard navigation block not found.' }
+          $main = $main.Replace($oldKeys, $newKeys)
+          [IO.File]::WriteAllText((Join-Path $PWD $mainPath), $main, (New-Object Text.UTF8Encoding($false)))
+
+          $comparePath = 'comparison_windows.go'
+          $compare = Get-Content $comparePath -Raw
+          $anchor = @'
+          var _ = syscall.Errno(0)
+          '@
+          $method = @'
+          func (a *viewerApp) adjustAIComparisonSplit(delta float64) bool {
+                  if !aiCompare.active {
+                          return false
+                  }
+                  next := stepCompareSplit(aiCompare.split, delta)
+                  if next != aiCompare.split {
+                          aiCompare.split = next
+                          a.invalidate()
+                  }
+                  return true
+          }
+
+          var _ = syscall.Errno(0)
+          '@
+          if (-not $compare.Contains($anchor)) { throw 'Comparison Windows anchor not found.' }
+          $compare = $compare.Replace($anchor, $method)
+          [IO.File]::WriteAllText((Join-Path $PWD $comparePath), $compare, (New-Object Text.UTF8Encoding($false)))
+
+          Add-Content -Path 'comparison_core.go' -Encoding utf8 -Value @'
+
+          func stepCompareSplit(current, delta float64) float64 {
+                  return clampCompareSplit(current + delta)
+          }
+          '@
+
+          Add-Content -Path 'comparison_core_test.go' -Encoding utf8 -Value @'
+
+          func TestStepCompareSplit(t *testing.T) {
+                  if got := stepCompareSplit(0.5, -0.02); got != 0.48 {
+                          t.Fatalf("left step=%v", got)
+                  }
+                  if got := stepCompareSplit(0.5, 0.02); got != 0.52 {
+                          t.Fatalf("right step=%v", got)
+                  }
+                  if got := stepCompareSplit(0.02, -0.02); got != 0.02 {
+                          t.Fatalf("low clamp=%v", got)
+                  }
+                  if got := stepCompareSplit(0.98, 0.02); got != 0.98 {
+                          t.Fatalf("high clamp=%v", got)
+                  }
+          }
+          '@
+
+          gofmt -w main_windows.go comparison_windows.go comparison_core.go comparison_core_test.go
+
+      - name: Build prerequisites and verify
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.0-dev" -o ..\NightView-1.6.0-dev.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView-1.6.0-dev.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+          go test -count=1 ./...
+          go vet -unsafeptr=false ./...
+          if ((Get-Item ..\NightView-1.6.0-dev.exe).Length -le 0) { throw 'NightView candidate is empty.' }
+          $hash = (Get-FileHash ..\NightView-1.6.0-dev.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "NightView 1.6 dev SHA-256: $hash"
+
+      - name: Repack verified staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-next.tar.gz *
+          Pop-Location
+          $hash = (Get-FileHash 'nightview-source-next.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "New staged source SHA-256: $hash"
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6.txt' -Encoding ascii
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-next.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Wrote $index source chunks."
+
+      - name: Commit verified staged source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current STAGED_SOURCE_SHA256_1_6.txt
+          if (git diff --cached --quiet) { throw 'No staged source changes were produced.' }
+          git commit -m 'Add keyboard control for AI comparison divider'
+          git push
