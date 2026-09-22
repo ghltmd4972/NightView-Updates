@@ -255,7 +255,7 @@ compare.write_text(src, encoding="utf-8", newline="\n")
 # ---------------------------------------------------------------------------
 src = ai.read_text(encoding="utf-8")
 
-overwrite_repl = r'''\tcase IDYES:
+overwrite_repl = '''\tcase IDYES:
 \t\tsnapshotPath, snapshotCleanup, snapshotErr := stageAICompareOriginalSnapshot(input)
 \t\tif snapshotErr != nil {
 \t\t\ta.onAIUpscaleErrorText("원본 비교용 임시 복사본을 만들지 못해 덮어쓰기를 중단했습니다.\\n\\n" + snapshotErr.Error())
