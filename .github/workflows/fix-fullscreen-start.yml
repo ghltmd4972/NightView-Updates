@@ -1,0 +1,232 @@
+name: Fix true fullscreen startup
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-fullscreen-start.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-fullscreen-start
+  cancel-in-progress: true
+
+jobs:
+  patch-build-test-stage:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct and verify current source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          if ($chunks.Count -lt 1) { throw 'No staged source chunks found.' }
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $expected = ((Get-Content SOURCE_SHA256.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Current source SHA-256 mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+
+      - name: Patch startup to real fullscreen
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tab = [char]9
+          $nl = [Environment]::NewLine
+          $path = 'main_windows.go'
+          $main = Get-Content $path -Raw
+
+          $oldCall = $tab + 'pShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)'
+          $newCall = $tab + 'pShowWindow.Call(hwnd, SW_SHOW)'
+          $count = ([regex]::Matches($main, [regex]::Escape($oldCall))).Count
+          if ($count -ne 1) { throw "Expected exactly one maximized startup call, found $count." }
+          $main = $main.Replace($oldCall, $newCall)
+
+          $oldSeq = $tab + 'pShowWindow.Call(hwnd, SW_SHOW)' + $nl + $tab + 'pUpdateWindow.Call(hwnd)'
+          $newSeq = $oldSeq + $nl + $tab + 'app.toggleFullscreen()'
+          if (-not $main.Contains($oldSeq)) { throw 'Startup show/update anchor not found.' }
+          $main = $main.Replace($oldSeq, $newSeq)
+
+          $maxConst = $tab + 'SW_SHOWMAXIMIZED                    = 3' + $nl
+          if ($main.Contains($maxConst)) {
+            $main = $main.Replace($maxConst, '')
+          }
+
+          [IO.File]::WriteAllText((Join-Path $PWD $path), $main, (New-Object Text.UTF8Encoding($false)))
+          gofmt -w main_windows.go
+
+          $check = Get-Content main_windows.go -Raw
+          if ($check.Contains('pShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)')) { throw 'Maximized-only startup call remains.' }
+          if (-not $check.Contains('pShowWindow.Call(hwnd, SW_SHOW)')) { throw 'Normal show call missing.' }
+          if (-not $check.Contains('app.toggleFullscreen()')) { throw 'Fullscreen startup call missing.' }
+
+      - name: Build and run regression tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '1.6.3'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=$version" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewAITestEngine.exe .\ai\testfixture_engine
+
+          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
+          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
+          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
+          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
+          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
+          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
+          $env:NIGHTVIEW_AI_FIXTURE = (Resolve-Path ..\NightViewAITestEngine.exe).Path
+
+          go test -count=1 .\...
+          go vet -unsafeptr=false .\...
+
+      - name: Native Windows true-fullscreen smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+
+          [StructLayout(LayoutKind.Sequential)]
+          public struct RECT {
+              public int Left;
+              public int Top;
+              public int Right;
+              public int Bottom;
+          }
+
+          [StructLayout(LayoutKind.Sequential)]
+          public struct MONITORINFO {
+              public int cbSize;
+              public RECT rcMonitor;
+              public RECT rcWork;
+              public int dwFlags;
+          }
+
+          public static class NightViewFullscreenTest {
+              [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW")]
+              public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+              [DllImport("user32.dll")]
+              [return: MarshalAs(UnmanagedType.Bool)]
+              public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+              [DllImport("user32.dll")]
+              public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+              [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+              [return: MarshalAs(UnmanagedType.Bool)]
+              public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);
+          }
+          "@
+
+          $p = Start-Process -FilePath (Resolve-Path '.\NightView.exe').Path -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(15)
+            $hwnd = [IntPtr]::Zero
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 250
+              $p.Refresh()
+              if ($p.HasExited) { throw "NightView exited before creating its main window. ExitCode=$($p.ExitCode)" }
+              if ($p.MainWindowHandle -ne 0) {
+                $hwnd = [IntPtr]$p.MainWindowHandle
+                break
+              }
+            }
+            if ($hwnd -eq [IntPtr]::Zero) { throw 'NightView main window was not created within 15 seconds.' }
+
+            $style = [NightViewFullscreenTest]::GetWindowLongPtr($hwnd, -16).ToInt64()
+            $WS_OVERLAPPEDWINDOW = [int64]0x00CF0000
+            $WS_POPUP = [int64]0x80000000
+            if (($style -band $WS_OVERLAPPEDWINDOW) -ne 0) { throw ('Window still has overlapped-window chrome. Style=0x{0:X}' -f $style) }
+            if (($style -band $WS_POPUP) -eq 0) { throw ('Window is not WS_POPUP fullscreen. Style=0x{0:X}' -f $style) }
+
+            $rect = New-Object RECT
+            if (-not [NightViewFullscreenTest]::GetWindowRect($hwnd, [ref]$rect)) { throw 'GetWindowRect failed.' }
+            $mon = [NightViewFullscreenTest]::MonitorFromWindow($hwnd, 2)
+            if ($mon -eq [IntPtr]::Zero) { throw 'MonitorFromWindow failed.' }
+            $mi = New-Object MONITORINFO
+            $mi.cbSize = [Runtime.InteropServices.Marshal]::SizeOf([type][MONITORINFO])
+            if (-not [NightViewFullscreenTest]::GetMonitorInfo($mon, [ref]$mi)) { throw 'GetMonitorInfo failed.' }
+
+            if ($rect.Left -ne $mi.rcMonitor.Left -or $rect.Top -ne $mi.rcMonitor.Top -or $rect.Right -ne $mi.rcMonitor.Right -or $rect.Bottom -ne $mi.rcMonitor.Bottom) {
+              throw "Window rectangle does not match monitor rectangle. Window=$($rect.Left),$($rect.Top),$($rect.Right),$($rect.Bottom) Monitor=$($mi.rcMonitor.Left),$($mi.rcMonitor.Top),$($mi.rcMonitor.Right),$($mi.rcMonitor.Bottom)"
+            }
+            Write-Host 'Verified: NightView starts in borderless true fullscreen and fills the active monitor.'
+          }
+          finally {
+            if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+          }
+
+      - name: Repack verified source and prepare 1.6.3 release metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location buildsrc
+          tar -czf ..\nightview-source-1.6.3.tar.gz *
+          Pop-Location
+
+          $hash = (Get-FileHash 'nightview-source-1.6.3.tar.gz' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  nightview-source.tar.gz" | Set-Content 'SOURCE_SHA256.txt' -Encoding ascii
+          "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6_3.txt' -Encoding ascii
+          "1.6.3" | Set-Content 'VERSION' -Encoding ascii
+
+          $notes = @(
+            'NightView 1.6.3',
+            '- 프로그램 실행 시 일반 창이나 단순 최대화가 아니라 F11과 같은 테두리 없는 전체화면으로 바로 시작',
+            '- 전체화면은 현재 모니터 영역을 정확히 채우며 기존 F11 전환 기능 유지',
+            '- 수동으로 업데이트 확인을 눌렀을 때 새 버전이 있으면 중복 확인창 없이 바로 다운로드 -> 교체 -> 자동 재실행',
+            '- 프로그램 시작 시 자동으로 새 버전을 발견한 경우에는 설치 여부 확인창 유지',
+            '- 고정 설치 경로의 기존 NightView.exe 교체 방식 유지',
+            '- 설정과 사용자 데이터 보존 및 업데이트 실패 시 백업/롤백 유지'
+          ) -join [Environment]::NewLine
+          [IO.File]::WriteAllText((Join-Path $PWD 'RELEASE_NOTES.txt'), $notes + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+
+          $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-1.6.3.tar.gz'))
+          $b64 = [Convert]::ToBase64String($bytes)
+          Get-ChildItem 'source/current/chunk_*.b64' -ErrorAction SilentlyContinue | Remove-Item -Force
+          $chunkSize = 8000
+          $index = 0
+          for ($offset = 0; $offset -lt $b64.Length; $offset += $chunkSize) {
+            $length = [Math]::Min($chunkSize, $b64.Length - $offset)
+            $part = $b64.Substring($offset, $length)
+            $name = ('source/current/chunk_{0:D4}.b64' -f $index)
+            [IO.File]::WriteAllText((Join-Path $PWD $name), $part, (New-Object Text.UTF8Encoding($false)))
+            $index++
+          }
+          Write-Host "Staged 1.6.3 source SHA-256: $hash"
+          Write-Host "Wrote $index source chunks."
+
+      - name: Commit verified 1.6.3 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add source/current SOURCE_SHA256.txt STAGED_SOURCE_SHA256_1_6_3.txt VERSION RELEASE_NOTES.txt
+          if (git diff --cached --quiet) { throw 'No verified changes were produced.' }
+          git commit -m 'Release NightView 1.6.3 true fullscreen startup'
+          git push
