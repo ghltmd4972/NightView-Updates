@@ -26,6 +26,18 @@ def sub_once(text, pattern, repl, label, flags=0):
         raise SystemExit(f"{label}: expected 1 regex match, found {count}")
     return out
 
+def replace_between_functions(text, start_sig, next_sig, replacement, label):
+    start = text.find(start_sig)
+    if start < 0:
+        raise SystemExit(f"{label}: start signature not found: {start_sig}")
+    end = text.find(next_sig, start + len(start_sig))
+    if end < 0:
+        raise SystemExit(f"{label}: next signature not found: {next_sig}")
+    second = text.find(start_sig, start + len(start_sig))
+    if second >= 0 and second < end:
+        raise SystemExit(f"{label}: start signature is ambiguous")
+    return text[:start] + replacement.rstrip() + "\n\n" + text[end:]
+
 # ---------------------------------------------------------------------------
 # Viewer: detect WEBP by file signature, not filename extension.
 # This fixes WEBP files saved/downloaded with .png/.jpg names.
@@ -199,9 +211,10 @@ register_associations = r'''func registerAssociationsAt(base, mainPath, installe
 	return nil
 }
 '''
-assoc_windows = sub_once(
+assoc_windows = replace_between_functions(
     assoc_windows,
-    r'(?ms)^func registerAssociationsAt\(base, mainPath, installerName string, extensions \[\]string, progID string\) error \{.*?^\}\r?\n(?=func registerCapabilitiesAt)',
+    "func registerAssociationsAt(",
+    "func registerCapabilitiesAt(",
     register_associations,
     "registerAssociationsAt",
 )
@@ -231,9 +244,10 @@ register_capabilities = r'''func registerCapabilitiesAt(capabilitiesKey, registe
 	return regAddValue(registeredAppsKey, "NightView", capabilityReference, "REG_SZ")
 }
 '''
-assoc_windows = sub_once(
+assoc_windows = replace_between_functions(
     assoc_windows,
-    r'(?ms)^func registerCapabilitiesAt\(capabilitiesKey, registeredAppsKey, capabilityReference, mainPath string, extensions \[\]string, progID string\) error \{.*?^\}\r?\n(?=func regQueryDefault)',
+    "func registerCapabilitiesAt(",
+    "func regQueryDefault(",
     register_capabilities,
     "registerCapabilitiesAt",
 )
