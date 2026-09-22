@@ -1,4 +1,4 @@
-name: Build and publish NightView
+name: Build verify and publish NightView
 
 on:
   push:
@@ -20,36 +20,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-and-publish:
+  linux-verify:
     runs-on: ubuntu-latest
     env:
       GOFLAGS: -buildvcs=false
     steps:
-      - name: Check out update repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
           check-latest: false
 
-      - name: Reconstruct and verify source archive
+      - name: Reconstruct and verify source
         shell: bash
         run: |
           set -euo pipefail
-          wc -c source/chunk_*.b64
-          sha256sum source/chunk_*.b64
           cat source/chunk_*.b64 > source.b64
           base64 -d source.b64 > nightview-source.tar.gz
-          sha256sum nightview-source.tar.gz
           sha256sum -c SOURCE_SHA256.txt
-          mkdir -p buildsrc
+          mkdir buildsrc
           tar -xzf nightview-source.tar.gz -C buildsrc
 
-      - name: Test source
+      - name: Linux static and race verification
         shell: bash
         working-directory: buildsrc
         run: |
@@ -64,38 +59,109 @@ jobs:
           go test -race -count=1 ./...
           go vet -unsafeptr=false ./...
 
-      - name: Cross-compile Windows tests and executables
-        shell: bash
+  windows-verify-build:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct and verify source
+        shell: pwsh
         run: |
-          set -euo pipefail
-          VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
-          cd buildsrc
-          export GOOS=windows
-          export GOARCH=amd64
-          export CGO_ENABLED=0
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllText((Join-Path $PWD 'source.b64'), $text, [Text.Encoding]::ASCII)
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          $line = (Get-Content SOURCE_SHA256.txt -Raw).Trim()
+          $expected = ($line -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Source SHA-256 mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
 
-          go test -c -o ../NightView_tests_windows.exe .
-          go test -c -o ../NightViewUpdater_tests_windows.exe ./updater
+      - name: Build exact Windows release candidates and fixtures
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content ..\VERSION -Raw).Trim()
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=$version" -o ..\NightView.exe .
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.0.0" -o ..\NightViewUpdater.exe .\updater
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestSuccess.exe .\updater\testfixture_success
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewTestFailure.exe .\updater\testfixture_failure
+          New-Item -ItemType Directory -Force .\installer\payload | Out-Null
+          Copy-Item ..\NightView.exe .\installer\payload\NightView.exe -Force
+          Copy-Item ..\NightViewUpdater.exe .\installer\payload\NightViewUpdater.exe -Force
 
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ../NightViewUpdater.exe ./updater
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=${VERSION_VALUE}" -o ../NightView.exe .
+      - name: Native Windows tests including replacement and rollback
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:NIGHTVIEW_RELEASE_PE = (Resolve-Path ..\NightView.exe).Path
+          $env:NIGHTVIEW_UPDATER_PE = (Resolve-Path ..\NightViewUpdater.exe).Path
+          $env:NIGHTVIEW_TARGET_PE = $env:NIGHTVIEW_RELEASE_PE
+          $env:NIGHTVIEW_UPDATER_BUILT = $env:NIGHTVIEW_UPDATER_PE
+          $env:NIGHTVIEW_SUCCESS_PE = (Resolve-Path ..\NightViewTestSuccess.exe).Path
+          $env:NIGHTVIEW_FAILURE_PE = (Resolve-Path ..\NightViewTestFailure.exe).Path
+          go test -count=1 ./...
+          go vet -unsafeptr=false ./...
 
-          mkdir -p installer/payload
-          cp ../NightView.exe installer/payload/NightView.exe
-          cp ../NightViewUpdater.exe installer/payload/NightViewUpdater.exe
+      - name: Build setup after verified payload
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ..\NightViewSetup.exe .\installer
+          if ((Get-Item ..\NightView.exe).Length -le 0) { throw 'NightView.exe is empty' }
+          if ((Get-Item ..\NightViewUpdater.exe).Length -le 0) { throw 'NightViewUpdater.exe is empty' }
+          if ((Get-Item ..\NightViewSetup.exe).Length -le 0) { throw 'NightViewSetup.exe is empty' }
+          Get-FileHash ..\NightView.exe -Algorithm SHA256
+          Get-FileHash ..\NightViewUpdater.exe -Algorithm SHA256
+          Get-FileHash ..\NightViewSetup.exe -Algorithm SHA256
 
-          go test -c -o ../NightViewSetup_tests_windows.exe ./installer
-          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui" -o ../NightViewSetup.exe ./installer
+      - name: Upload verified Windows binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightview-windows-x64
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            NightView.exe
+            NightViewUpdater.exe
+            NightViewSetup.exe
 
-      - name: Publish verified binaries and manifest
+  publish:
+    needs: [linux-verify, windows-verify-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightview-windows-x64
+          path: dist
+
+      - name: Publish only after both verification jobs pass
         shell: bash
         run: |
           set -euo pipefail
           VERSION_VALUE="$(tr -d '\r\n' < VERSION)"
           OUT="releases/${VERSION_VALUE}"
           mkdir -p "$OUT"
-          cp NightView.exe NightViewUpdater.exe NightViewSetup.exe "$OUT/"
-
+          cp dist/NightView.exe dist/NightViewUpdater.exe dist/NightViewSetup.exe "$OUT/"
           sha256sum "$OUT/NightView.exe" "$OUT/NightViewUpdater.exe" "$OUT/NightViewSetup.exe" > "$OUT/SHA256SUMS.txt"
 
           python3 - <<'PY'
@@ -104,45 +170,38 @@ jobs:
           import json
           import pathlib
 
-          version = pathlib.Path("VERSION").read_text(encoding="utf-8").strip()
-          notes = pathlib.Path("RELEASE_NOTES.txt").read_text(encoding="utf-8").strip()
-          base = f"https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/{version}"
+          version = pathlib.Path('VERSION').read_text(encoding='utf-8').strip()
+          notes = pathlib.Path('RELEASE_NOTES.txt').read_text(encoding='utf-8').strip()
+          base = f'https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/main/releases/{version}'
 
           def artifact(name):
-              path = pathlib.Path("releases") / version / name
+              path = pathlib.Path('releases') / version / name
               data = path.read_bytes()
               return {
-                  "url": f"{base}/{name}",
-                  "sha256": hashlib.sha256(data).hexdigest(),
-                  "size": len(data),
+                  'url': f'{base}/{name}',
+                  'sha256': hashlib.sha256(data).hexdigest(),
+                  'size': len(data),
               }
 
           manifest = {
-              "schema": 1,
-              "version": version,
-              "published_at": datetime.datetime.now(datetime.timezone.utc)
-                  .replace(microsecond=0)
-                  .isoformat()
-                  .replace("+00:00", "Z"),
-              "notes": notes,
-              "nightview": artifact("NightView.exe"),
-              "updater": artifact("NightViewUpdater.exe"),
+              'schema': 1,
+              'enabled': True,
+              'version': version,
+              'published_at': datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+              'notes': notes,
+              'nightview': artifact('NightView.exe'),
+              'updater': artifact('NightViewUpdater.exe'),
           }
-
-          pathlib.Path("latest.json").write_text(
-              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-              encoding="utf-8",
-          )
+          pathlib.Path('latest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
           PY
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --rebase
           git add "$OUT" latest.json
-
           if git diff --cached --quiet; then
-            echo "Nothing new to publish."
+            echo 'Nothing new to publish.'
             exit 0
           fi
-
           git commit -m "Publish NightView ${VERSION_VALUE}"
           git push
