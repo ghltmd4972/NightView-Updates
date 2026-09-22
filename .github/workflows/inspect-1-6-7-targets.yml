@@ -23,24 +23,12 @@ jobs:
           [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
           New-Item -ItemType Directory -Force buildsrc | Out-Null
           tar -xzf nightview-source.tar.gz -C buildsrc
-      - name: Print exact target files
+      - name: Print target files
         shell: pwsh
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($f in @(
-            'go.mod',
-            'main_windows.go',
-            'core.go',
-            'ai_core.go',
-            'installer\association_core.go',
-            'installer\association_windows.go',
-            'installer\main_windows.go',
-            'installer\association_core_test.go',
-            'installer\association_windows_test.go'
-          )) {
-            if (Test-Path $f) {
-              Write-Host ('===== FILE: ' + $f + ' =====')
-              Get-Content $f
-            }
+          foreach ($f in @('go.mod','core.go','main_windows.go','installer/association_core.go','installer/association_windows.go','installer/main_windows.go')) {
+            Write-Host ("===== " + $f + " =====")
+            Get-Content $f
           }
