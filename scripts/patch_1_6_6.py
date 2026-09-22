@@ -284,12 +284,11 @@ if src.count("\tcase IDYES:") != 1:
     raise SystemExit(f"AI 4K overwrite branch is ambiguous: found {src.count(chr(9) + 'case IDYES:')} IDYES branches")
 src = src[:overwrite_start] + overwrite_repl + src[overwrite_end:]
 
-src = replace_once(
-    src,
-    r'''messageBox\(a\.hwnd, "AI 4K 결과를 원본 파일에 덮어썼습니다\.\\n\\n"\+savedPath, "NightView AI 4K", MB_OK\|MB_ICONINFO\)''',
-    r'''messageBox(a.hwnd, "AI 4K 결과를 원본 파일에 덮어썼습니다.\n\n"+savedPath+"\n\nC 키로 덮어쓰기 전 원본과 AI 4K 결과를 비교할 수 있습니다.", "NightView AI 4K", MB_OK|MB_ICONINFO)''',
-    "overwrite completion message",
-)
+old_completion = r'''messageBox(a.hwnd, "AI 4K 결과를 원본 파일에 덮어썼습니다.\n\n"+savedPath, "NightView AI 4K", MB_OK|MB_ICONINFO)'''
+new_completion = r'''messageBox(a.hwnd, "AI 4K 결과를 원본 파일에 덮어썼습니다.\n\n"+savedPath+"\n\nC 키로 덮어쓰기 전 원본과 AI 4K 결과를 비교할 수 있습니다.", "NightView AI 4K", MB_OK|MB_ICONINFO)'''
+if src.count(old_completion) != 1:
+    raise SystemExit(f"overwrite completion message: expected 1 exact match, found {src.count(old_completion)}")
+src = src.replace(old_completion, new_completion, 1)
 
 ai.write_text(src, encoding="utf-8", newline="\n")
 
