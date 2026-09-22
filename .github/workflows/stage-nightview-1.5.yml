@@ -998,6 +998,12 @@ jobs:
           \t}
           }
           ''', encoding='utf-8')
+          # Raw Python strings above intentionally preserve Go escapes such as \\n.
+          # Convert only literal indentation escapes (\\t) into real tabs before gofmt.
+          for name in ['ai_windows.go','comparison_core.go','comparison_core_test.go','ai_cache.go','ai_cache_test.go','comparison_windows.go','comparison_windows_test.go']:
+              p = Path(name)
+              s = p.read_text(encoding='utf-8').replace('\\\\t', '\\t')
+              p.write_text(s, encoding='utf-8')
           '@ | python
           if ($LASTEXITCODE -ne 0) { throw 'Source patch failed.' }
           Get-ChildItem . -File -Filter '*.go' | ForEach-Object { gofmt -w $_.FullName }
