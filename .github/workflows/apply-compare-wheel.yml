@@ -53,25 +53,18 @@ jobs:
           if ($main.Contains('a.onAICompareMouseWheel(delta, p)')) {
             throw 'Comparison wheel hook already exists; refusing duplicate patch.'
           }
-          $wheelAnchor = @'
-          func (a *viewerApp) onMouseWheel(delta int, p POINT) {
-                  if a.image == nil {
-                          return
-                  }
-          '@
-          $wheelReplace = @'
-          func (a *viewerApp) onMouseWheel(delta int, p POINT) {
-                  if a.image == nil {
-                          return
-                  }
-                  if a.onAICompareMouseWheel(delta, p) {
-                          return
-                  }
-          '@
-          if (-not $main.Contains($wheelAnchor)) {
-            throw 'Expected onMouseWheel anchor not found.'
+          $nl = [Environment]::NewLine
+          $wheelPattern = '(?ms)(func \(a \*viewerApp\) onMouseWheel\(delta int, p POINT\) \{\s*if a\.image == nil \{\s*return\s*\}\s*)'
+          $wheelMatches = [regex]::Matches($main, $wheelPattern)
+          if ($wheelMatches.Count -ne 1) {
+            throw "Expected exactly one onMouseWheel anchor, found $($wheelMatches.Count)."
           }
-          $main = $main.Replace($wheelAnchor, $wheelReplace)
+          $main = [regex]::Replace(
+            $main,
+            $wheelPattern,
+            { param($m) $m.Groups[1].Value + [char]9 + 'if a.onAICompareMouseWheel(delta, p) {' + $nl + [char]9 + [char]9 + 'return' + $nl + [char]9 + '}' + $nl },
+            1
+          )
 
           $statusOld = 'rt += fmt.Sprintf("    비교 %.0f%%  ←/→ 조절 · Home 중앙", a.aiComparisonSplit()*100)'
           $statusNew = 'rt += fmt.Sprintf("    비교 %.0f%%  ←/→ 조절 · 분할선 휠 · Home 중앙", a.aiComparisonSplit()*100)'
@@ -87,59 +80,38 @@ jobs:
             throw 'Comparison wheel method already exists; refusing duplicate patch.'
           }
 
-          $stateOld = @'
-          type aiCompareState struct {
-                  candidate aiCompareCandidate
-                  active    bool
-                  original  *imageAsset
-                  split     float64
-                  dragging  bool
+          $statePattern = '(?m)^(\s*dragging\s+bool\s*\r?\n)(\s*\})'
+          if ([regex]::Matches($compare, $statePattern).Count -ne 1) {
+            throw 'Expected exactly one aiCompareState dragging field.'
           }
-          '@
-          $stateNew = @'
-          type aiCompareState struct {
-                  candidate  aiCompareCandidate
-                  active     bool
-                  original   *imageAsset
-                  split      float64
-                  dragging   bool
-                  wheelAccum int
-          }
-          '@
-          if (-not $compare.Contains($stateOld)) {
-            throw 'Expected aiCompareState block not found.'
-          }
-          $compare = $compare.Replace($stateOld, $stateNew)
+          $compare = [regex]::Replace(
+            $compare,
+            $statePattern,
+            { param($m) $m.Groups[1].Value + [char]9 + 'wheelAccum int' + $nl + $m.Groups[2].Value },
+            1
+          )
 
-          $startOld = @'
-                  aiCompare.active = true
-                  aiCompare.split = 0.5
-                  aiCompare.dragging = false
-          '@
-          $startNew = @'
-                  aiCompare.active = true
-                  aiCompare.split = 0.5
-                  aiCompare.dragging = false
-                  aiCompare.wheelAccum = 0
-          '@
-          if (-not $compare.Contains($startOld)) {
-            throw 'Expected comparison start state not found.'
+          $startPattern = '(?ms)(aiCompare\.active = true\s*aiCompare\.split = 0\.5\s*aiCompare\.dragging = false\s*)'
+          if ([regex]::Matches($compare, $startPattern).Count -ne 1) {
+            throw 'Expected exactly one comparison start state.'
           }
-          $compare = $compare.Replace($startOld, $startNew)
+          $compare = [regex]::Replace(
+            $compare,
+            $startPattern,
+            { param($m) $m.Groups[1].Value + [char]9 + 'aiCompare.wheelAccum = 0' + $nl },
+            1
+          )
 
-          $endOld = @'
-                  aiCompare.dragging = false
-                  aiCompare.active = false
-          '@
-          $endNew = @'
-                  aiCompare.dragging = false
-                  aiCompare.wheelAccum = 0
-                  aiCompare.active = false
-          '@
-          if (-not $compare.Contains($endOld)) {
-            throw 'Expected comparison end state not found.'
+          $endPattern = '(?ms)(aiCompare\.dragging = false\s*)(aiCompare\.active = false)'
+          if ([regex]::Matches($compare, $endPattern).Count -ne 1) {
+            throw 'Expected exactly one comparison end state.'
           }
-          $compare = $compare.Replace($endOld, $endNew)
+          $compare = [regex]::Replace(
+            $compare,
+            $endPattern,
+            { param($m) $m.Groups[1].Value + 'aiCompare.wheelAccum = 0' + $nl + [char]9 + $m.Groups[2].Value },
+            1
+          )
 
           $anchor = 'func (a *viewerApp) resetAIComparisonSplit() bool {'
           if ([regex]::Matches($compare, [regex]::Escape($anchor)).Count -ne 1) {
