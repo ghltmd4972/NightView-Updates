@@ -49,7 +49,7 @@ jobs:
 
           $mainPath = 'main_windows.go'
           $main = Get-Content $mainPath -Raw
-          $keyPattern = '(?ms)\\bswitch vk \\{\\s*case VK_LEFT,\\s*VK_BACK:\\s*a\\.navigate\\(-1\\)\\s*case VK_RIGHT,\\s*VK_SPACE:\\s*a\\.navigate\\(1\\)'
+          $keyPattern = '(?ms)\bswitch vk \{\s*case VK_LEFT,\s*VK_BACK:\s*a\.navigate\(-1\)\s*case VK_RIGHT,\s*VK_SPACE:\s*a\.navigate\(1\)'
           $keyReplacement = @'
           switch vk {
           case VK_LEFT:
