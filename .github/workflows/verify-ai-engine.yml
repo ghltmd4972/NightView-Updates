@@ -1,0 +1,125 @@
+name: Verify NightView AI upscale engine
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/verify-ai-engine.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-ai-engine-verify
+  cancel-in-progress: true
+
+jobs:
+  verify-ai-engine:
+    runs-on: windows-latest
+    steps:
+      - name: Check out update repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download pinned official Real-ESRGAN portable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip'
+          Invoke-WebRequest -Uri $url -OutFile 'realesrgan-windows.zip'
+          $actualSize = (Get-Item 'realesrgan-windows.zip').Length
+          $expectedSize = 45474481
+          if ($actualSize -ne $expectedSize) {
+            throw "Unexpected engine archive size: $actualSize (expected $expectedSize)"
+          }
+          $hash = (Get-FileHash 'realesrgan-windows.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          "AI_ENGINE_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "AI_ENGINE_SIZE=$actualSize" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Archive SHA-256: $hash"
+
+      - name: Validate archive structure, executable, models, and CLI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive -Path 'realesrgan-windows.zip' -DestinationPath 'realesrgan-package' -Force
+
+          $exeFiles = @(Get-ChildItem 'realesrgan-package' -Recurse -File -Filter 'realesrgan-ncnn-vulkan.exe')
+          if ($exeFiles.Count -ne 1) {
+            throw "Expected exactly one realesrgan-ncnn-vulkan.exe, found $($exeFiles.Count)"
+          }
+          $exe = $exeFiles[0]
+          $engineRoot = $exe.Directory.FullName
+          $models = Join-Path $engineRoot 'models'
+          if (-not (Test-Path $models -PathType Container)) {
+            throw 'Real-ESRGAN models directory is missing.'
+          }
+
+          $required = @(
+            'realesrgan-x4plus-anime.bin',
+            'realesrgan-x4plus-anime.param',
+            'realesrgan-x4plus.bin',
+            'realesrgan-x4plus.param',
+            'realesr-animevideov3-x2.bin',
+            'realesr-animevideov3-x2.param',
+            'realesr-animevideov3-x4.bin',
+            'realesr-animevideov3-x4.param'
+          )
+          foreach ($name in $required) {
+            $p = Join-Path $models $name
+            if (-not (Test-Path $p -PathType Leaf)) {
+              Write-Host 'Package model files:'
+              Get-ChildItem $models -File | Select-Object -ExpandProperty Name
+              throw "Required model missing: $name"
+            }
+          }
+
+          $help = & $exe.FullName -h 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) {
+            throw "Real-ESRGAN executable help command failed with exit code $LASTEXITCODE"
+          }
+          if ($help -notmatch '-s scale' -or $help -notmatch 'realesrgan-x4plus-anime') {
+            throw 'Unexpected Real-ESRGAN CLI help output.'
+          }
+          $help | Set-Content 'realesrgan-help.txt' -Encoding utf8
+
+          $relativeExe = [IO.Path]::GetRelativePath((Resolve-Path 'realesrgan-package').Path, $exe.FullName).Replace('\\','/')
+          "AI_ENGINE_EXE=$relativeExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Publish verified engine manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifest = [ordered]@{
+            schema = 1
+            enabled = $true
+            engine = 'Real-ESRGAN-ncnn-vulkan'
+            package_version = '20220424'
+            upstream_release = 'v0.2.5.0'
+            url = 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip'
+            sha256 = $env:AI_ENGINE_SHA256
+            size = [int64]$env:AI_ENGINE_SIZE
+            executable = $env:AI_ENGINE_EXE
+            supported_scales = @(2, 4)
+            models = [ordered]@{
+              anime_2x = 'realesr-animevideov3'
+              anime_4x = 'realesrgan-x4plus-anime'
+              general_4x = 'realesrgan-x4plus'
+            }
+            verified_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          }
+          $json = $manifest | ConvertTo-Json -Depth 6
+          [IO.File]::WriteAllText((Join-Path $PWD 'ai-engine.json'), $json + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+          "$($env:AI_ENGINE_SHA256)  realesrgan-ncnn-vulkan-20220424-windows.zip" | Set-Content 'AI_ENGINE_SHA256.txt' -Encoding ascii
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ai-engine.json AI_ENGINE_SHA256.txt
+          if (git diff --cached --quiet) {
+            Write-Host 'Verified manifest is already current.'
+            exit 0
+          }
+          git commit -m 'Verify Real-ESRGAN engine for NightView'
+          git push
