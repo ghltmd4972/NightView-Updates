@@ -50,17 +50,19 @@ jobs:
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
+          $tab = [char]9
+          $nl = [Environment]::NewLine
 
           $mainPath = 'main_windows.go'
           $main = Get-Content $mainPath -Raw
           if ($main.Contains('SW_SHOWMAXIMIZED')) { throw 'SW_SHOWMAXIMIZED already exists; refusing duplicate patch.' }
-          $oldConst = [char]9 + 'SW_SHOW                             = 5'
-          $newConst = [char]9 + 'SW_SHOWMAXIMIZED                    = 3' + [Environment]::NewLine + $oldConst
+          $oldConst = $tab + 'SW_SHOW                             = 5'
+          $newConst = $tab + 'SW_SHOWMAXIMIZED                    = 3' + $nl + $oldConst
           if (-not $main.Contains($oldConst)) { throw 'SW_SHOW anchor not found.' }
           $main = $main.Replace($oldConst, $newConst)
 
-          $oldShow = [char]9 + 'pShowWindow.Call(hwnd, SW_SHOW)'
-          $newShow = [char]9 + 'pShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)'
+          $oldShow = $tab + 'pShowWindow.Call(hwnd, SW_SHOW)'
+          $newShow = $tab + 'pShowWindow.Call(hwnd, SW_SHOWMAXIMIZED)'
           $showCount = ([regex]::Matches($main, [regex]::Escape($oldShow))).Count
           if ($showCount -ne 1) { throw "Expected exactly one startup ShowWindow call, found $showCount." }
           $main = $main.Replace($oldShow, $newShow)
@@ -68,23 +70,25 @@ jobs:
 
           $updatePath = 'updatecheck_windows.go'
           $update = Get-Content $updatePath -Raw
-          $oldBlock = @'
-	updateChecks.mu.Lock()
-	m := updateChecks.manifest
-	updateChecks.mu.Unlock()
-	text := fmt.Sprintf("NightView %s 새 버전이 있습니다.\n\n현재 버전: %s", m.Version, version)
-'@
-          $newBlock = @'
-	updateChecks.mu.Lock()
-	m := updateChecks.manifest
-	manual := updateChecks.manual
-	updateChecks.mu.Unlock()
-	if manual {
-		a.startUpdateInstall(m)
-		return
-	}
-	text := fmt.Sprintf("NightView %s 새 버전이 있습니다.\n\n현재 버전: %s", m.Version, version)
-'@
+          $oldLines = @(
+            $tab + 'updateChecks.mu.Lock()',
+            $tab + 'm := updateChecks.manifest',
+            $tab + 'updateChecks.mu.Unlock()',
+            $tab + 'text := fmt.Sprintf("NightView %s 새 버전이 있습니다.\n\n현재 버전: %s", m.Version, version)'
+          )
+          $newLines = @(
+            $tab + 'updateChecks.mu.Lock()',
+            $tab + 'm := updateChecks.manifest',
+            $tab + 'manual := updateChecks.manual',
+            $tab + 'updateChecks.mu.Unlock()',
+            $tab + 'if manual {',
+            $tab + $tab + 'a.startUpdateInstall(m)',
+            $tab + $tab + 'return',
+            $tab + '}',
+            $tab + 'text := fmt.Sprintf("NightView %s 새 버전이 있습니다.\n\n현재 버전: %s", m.Version, version)'
+          )
+          $oldBlock = $oldLines -join $nl
+          $newBlock = $newLines -join $nl
           if (-not $update.Contains($oldBlock)) { throw 'onUpdateAvailable anchor not found.' }
           $update = $update.Replace($oldBlock, $newBlock)
           [IO.File]::WriteAllText((Join-Path $PWD $updatePath), $update, (New-Object Text.UTF8Encoding($false)))
@@ -169,15 +173,16 @@ jobs:
           "$hash  nightview-source.tar.gz" | Set-Content 'STAGED_SOURCE_SHA256_1_6_2.txt' -Encoding ascii
           "1.6.2" | Set-Content 'VERSION' -Encoding ascii
 
-          @'
-NightView 1.6.2
-- NightView 실행 시 1280x800 창모드가 아니라 Windows 최대화 상태로 바로 시작
-- 수동으로 '업데이트 확인'을 눌렀을 때 새 버전이 있으면 중복 확인창 없이 바로 다운로드 -> 교체 -> 자동 재실행
-- 프로그램 시작 시 자동으로 새 버전을 발견한 경우에는 기존처럼 설치 여부 확인창 유지
-- 고정 설치 경로의 기존 NightView.exe 교체 방식 유지
-- 설정과 사용자 데이터 보존 유지
-- 업데이트 실패 시 기존 실행 파일 백업/롤백 안전장치 유지
-'@ | Set-Content 'RELEASE_NOTES.txt' -Encoding utf8
+          $notes = @(
+            'NightView 1.6.2',
+            '- NightView 실행 시 1280x800 창모드가 아니라 Windows 최대화 상태로 바로 시작',
+            '- 수동으로 업데이트 확인을 눌렀을 때 새 버전이 있으면 중복 확인창 없이 바로 다운로드 -> 교체 -> 자동 재실행',
+            '- 프로그램 시작 시 자동으로 새 버전을 발견한 경우에는 기존처럼 설치 여부 확인창 유지',
+            '- 고정 설치 경로의 기존 NightView.exe 교체 방식 유지',
+            '- 설정과 사용자 데이터 보존 유지',
+            '- 업데이트 실패 시 기존 실행 파일 백업/롤백 안전장치 유지'
+          ) -join [Environment]::NewLine
+          [IO.File]::WriteAllText((Join-Path $PWD 'RELEASE_NOTES.txt'), $notes + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
 
           $bytes = [IO.File]::ReadAllBytes((Join-Path $PWD 'nightview-source-1.6.2.tar.gz'))
           $b64 = [Convert]::ToBase64String($bytes)
