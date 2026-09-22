@@ -1,4 +1,4 @@
-# NightView 1.6.5 verified release trigger
+# NightView 1.6.6 verified release trigger
 name: Build verify and publish NightView
 
 on:
