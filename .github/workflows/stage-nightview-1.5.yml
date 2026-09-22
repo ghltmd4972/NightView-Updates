@@ -658,7 +658,7 @@ jobs:
           \t"testing"
           )
 
-          func writeTestPNG(t *testing.T, path string, w, h int, c color.Color) {
+          func writeAICachePNG(t *testing.T, path string, w, h int, c color.Color) {
           \tt.Helper()
           \tim := image.NewRGBA(image.Rect(0, 0, w, h))
           \tfor y := 0; y < h; y++ {
@@ -694,8 +694,8 @@ jobs:
           \td := t.TempDir()
           \tin := filepath.Join(d, "원본 image.png")
           \tout := filepath.Join(d, "up.png")
-          \twriteTestPNG(t, in, 5, 3, color.RGBA{R:255,A:255})
-          \twriteTestPNG(t, out, 10, 6, color.RGBA{B:255,A:255})
+          \twriteAICachePNG(t, in, 5, 3, color.RGBA{R:255,A:255})
+          \twriteAICachePNG(t, out, 10, 6, color.RGBA{B:255,A:255})
           \tif err := validateAIUpscaleDimensions(in, out, 2); err != nil { t.Fatal(err) }
           \tsha, _, err := fileSHA256(in)
           \tif err != nil { t.Fatal(err) }
@@ -946,8 +946,8 @@ jobs:
           \td := t.TempDir()
           \torigPath := filepath.Join(d, "원본 빨강.png")
           \tresultPath := filepath.Join(d, "결과 파랑.png")
-          \twriteTestPNG(t, origPath, 8, 8, color.RGBA{R:255,A:255})
-          \twriteTestPNG(t, resultPath, 16, 16, color.RGBA{B:255,A:255})
+          \twriteAICachePNG(t, origPath, 8, 8, color.RGBA{R:255,A:255})
+          \twriteAICachePNG(t, resultPath, 16, 16, color.RGBA{B:255,A:255})
 
           \tvar token uintptr
           \tin := gdipStartupInputTest{Version:1}
