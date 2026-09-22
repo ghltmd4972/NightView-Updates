@@ -22,6 +22,8 @@ concurrency:
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -buildvcs=false
     steps:
       - name: Check out update repository
         uses: actions/checkout@v4
