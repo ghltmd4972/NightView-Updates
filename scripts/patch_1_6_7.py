@@ -178,7 +178,7 @@ func loadImageAsset(path string) (*imageAsset, error) {
 '''
 main = sub_once(
     main,
-    r'(?ms)^func loadImageAsset\(path string\) \{.*?^func applyExifOrientation',
+    r'(?ms)^func loadImageAsset\(path string\) \(\*imageAsset, error\) \{.*?^func applyExifOrientation',
     load_func + '\nfunc applyExifOrientation',
     "loadImageAsset function",
 )
