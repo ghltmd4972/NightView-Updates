@@ -1,0 +1,50 @@
+name: Inspect staged NightView source
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/inspect-staged-source.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: pwsh
+        run: |
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+      - name: Print relevant viewer and AI source context
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          Write-Host '=== GO FILES ==='
+          Get-ChildItem . -File -Filter '*.go' | Select-Object -ExpandProperty Name
+          Write-Host '=== viewerApp / paint / menu / keyboard contexts ==='
+          Select-String -Path main_windows.go -Pattern 'type viewerApp|WM_PAINT|WM_RBUTTONUP|WM_KEYDOWN|showContextMenu|zoom|pan|currentPath|loadImage' -Context 4,12 | ForEach-Object {
+            Write-Host $_.Context.PreContext
+            Write-Host ("{0}: {1}" -f $_.LineNumber,$_.Line)
+            Write-Host $_.Context.PostContext
+            Write-Host '---'
+          }
+          Write-Host '=== AI WINDOWS ==='
+          Get-Content ai_windows.go
+          Write-Host '=== AI CORE HEAD/KEYS ==='
+          Select-String -Path ai_core.go -Pattern 'type |func |AI_|cache|upscale|result|original' -Context 2,8 | ForEach-Object {
+            Write-Host $_.Context.PreContext
+            Write-Host ("{0}: {1}" -f $_.LineNumber,$_.Line)
+            Write-Host $_.Context.PostContext
+            Write-Host '---'
+          }
+          Write-Host '=== AI TESTS ==='
+          Get-Content ai_core_test.go
+          if (Test-Path ai_windows_integration_test.go) { Get-Content ai_windows_integration_test.go }
