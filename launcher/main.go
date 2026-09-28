@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	manifestURL = "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/anime-picker-updates/latest.json"
+	manifestURL = "https://api.github.com/repos/ghltmd4972/NightView-Updates/contents/latest.json?ref=anime-picker-updates"
 	appDirName  = "AnimeCharacterRandomPickerUpdater"
 	coreName    = "AnimePickerCore.exe"
 	logName     = "update.log"
@@ -84,7 +84,7 @@ func main() {
 func resolveCore(appDir, logPath string) (string, error) {
 	current, currentPath, hasCurrent := loadCurrentRecord(appDir)
 	client := &http.Client{Timeout: 8 * time.Second}
-	m, err := fetchManifest(client, manifestURL+"?t="+fmt.Sprint(time.Now().UnixNano()))
+	m, err := fetchManifest(client, manifestURL+"&t="+fmt.Sprint(time.Now().UnixNano()))
 	if err == nil && m.Enabled {
 		if err := validateManifest(m); err == nil {
 			if hasCurrent && !recordMatchesManifest(current, m) {
@@ -312,7 +312,15 @@ func newestCachedCore(appDir string) string {
 
 func fetchManifest(client *http.Client, url string) (manifest, error) {
 	var m manifest
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return m, err
+	}
+	req.Header.Set("Accept", "application/vnd.github.raw+json")
+	req.Header.Set("User-Agent", "AnimeCharacterRandomPickerUpdater/1.0")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	resp, err := client.Do(req)
 	if err != nil {
 		return m, err
 	}
