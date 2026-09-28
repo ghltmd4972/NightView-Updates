@@ -2209,7 +2209,9 @@ function updateStats() {
         const meta = JSON.parse(localStorage.getItem(STORAGE_META_KEY) || "null");
         if (meta && meta.fileName) source = `업데이트 데이터: ${meta.fileName}`;
     } catch (_) {}
-    statsEl.textContent = `현재 ${entries.length.toLocaleString()}개 항목 · 중복 방지 사용 시 남은 항목 ${remaining.length.toLocaleString()}개 · ${source}`;
+    const totalCharacters = new Set(entries.map(getCharacterHistoryKey)).size;
+    const remainingCharacters = new Set(remaining.map(index => getCharacterHistoryKey(entries[index]))).size;
+    statsEl.textContent = `현재 ${totalCharacters.toLocaleString()}명 캐릭터 (${entries.length.toLocaleString()}개 복장/프롬프트 항목) · 중복 방지 사용 시 남은 캐릭터 ${remainingCharacters.toLocaleString()}명 · ${source}`;
 }
 
 function normalizeCompareTag(value) {
@@ -2663,8 +2665,20 @@ function clearSearch() {
     searchInputEl.focus();
 }
 
+const CHARACTER_VARIANT_SUFFIX_RE = /\s*(?:기본\s*복장|복장(?:\s*\d+)?|체육복|교복|사복|잠옷|수영복|겨울복|여름복|공식\s*복장|평상복|전투복|작업복|치어리더|히어로\s*코스튬|고양이\s*옷|외투\s*벗음|성인\s*버전|긴팔)\s*$/i;
+
+function getCanonicalCharacterName(entry) {
+    let name = String(entry?.character || "").trim();
+    let previous = "";
+    while (name && name !== previous) {
+        previous = name;
+        name = name.replace(CHARACTER_VARIANT_SUFFIX_RE, "").trim();
+    }
+    return normalizeCompareTag(name || entry?.character || "미분류");
+}
+
 function getCharacterHistoryKey(entry) {
-    return `${entry.work}__${entry.character}__${entry.variant || ""}`;
+    return `${normalizeCompareTag(entry?.work || "미분류")}__${getCanonicalCharacterName(entry)}`;
 }
 
 function pushRecentUnique(list, value, limit) {
@@ -2700,19 +2714,24 @@ function chooseDiverseEntryIndex(noRepeat) {
     const sourceIndexes = noRepeat ? remaining.slice() : entries.map((_, i) => i);
     if (!sourceIndexes.length) return -1;
 
-    const workGroups = new Map();
+    const characterGroups = new Map();
     for (const idx of sourceIndexes) {
         const entry = entries[idx];
         if (!entry) continue;
-        if (!workGroups.has(entry.work)) workGroups.set(entry.work, []);
-        workGroups.get(entry.work).push(idx);
+        const key = getCharacterHistoryKey(entry);
+        if (!characterGroups.has(key)) {
+            characterGroups.set(key, { key, entry, indexes: [] });
+        }
+        characterGroups.get(key).indexes.push(idx);
     }
 
-    const works = Array.from(workGroups.keys());
-    const pickedWork = weightedPick(works, getWorkDiversityWeight);
-    const candidates = (workGroups.get(pickedWork) || sourceIndexes).slice();
-    const pickedIndex = weightedPick(candidates, idx => getCharacterDiversityWeight(entries[idx]));
-    return typeof pickedIndex === "number" ? pickedIndex : -1;
+    const groups = Array.from(characterGroups.values());
+    const pickedGroup = weightedPick(groups, group =>
+        getWorkDiversityWeight(group.entry.work) * getCharacterDiversityWeight(group.entry)
+    );
+    if (!pickedGroup || !pickedGroup.indexes.length) return -1;
+
+    return pickedGroup.indexes[Math.floor(Math.random() * pickedGroup.indexes.length)];
 }
 
 function rememberDrawnEntry(entry) {
@@ -2738,8 +2757,10 @@ function draw() {
     }
 
     if (noRepeat) {
-        const poolPos = remaining.indexOf(idx);
-        if (poolPos >= 0) remaining.splice(poolPos, 1);
+        const drawnCharacterKey = getCharacterHistoryKey(entries[idx]);
+        remaining = remaining.filter(candidateIndex =>
+            getCharacterHistoryKey(entries[candidateIndex]) !== drawnCharacterKey
+        );
     }
 
     rememberDrawnEntry(entries[idx]);
