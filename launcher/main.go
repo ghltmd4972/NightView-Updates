@@ -278,6 +278,12 @@ func pruneCachedVersions(appDir, keepCore string) error {
 			failures = append(failures, entry.Name()+": "+err.Error())
 		}
 	}
+	legacy := filepath.Join(appDir, coreName)
+	if !strings.EqualFold(filepath.Clean(legacy), filepath.Clean(keepCore)) {
+		if err := os.Remove(legacy); err != nil && !os.IsNotExist(err) {
+			failures = append(failures, coreName+": "+err.Error())
+		}
+	}
 	if len(failures) > 0 {
 		return errors.New(strings.Join(failures, "; "))
 	}
