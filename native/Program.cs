@@ -1,6 +1,7 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using System.Reflection;
+using System.Text.Json;
 
 namespace AnimePickerNative;
 
@@ -59,6 +60,8 @@ internal sealed class MainForm : Form
     private readonly NativeBackend _backend;
     private readonly NativeHttpServer _server;
     private readonly string _webViewDataDir;
+    private readonly string _stateDir;
+    private readonly string _windowStatePath;
 
     public MainForm()
     {
@@ -68,17 +71,20 @@ internal sealed class MainForm : Form
         Height = 900;
         MinimumSize = new Size(900, 640);
 
+        _stateDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "AnimeCharacterRandomPickerV36");
+        Directory.CreateDirectory(_stateDir);
+        _windowStatePath = Path.Combine(_stateDir, "window_state.json");
+        RestoreWindowState();
+
         _webView = new WebView2
         {
             Dock = DockStyle.Fill
         };
         Controls.Add(_webView);
 
-        var stateDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "AnimeCharacterRandomPickerV36");
-
-        _backend = new NativeBackend(stateDir, SelectLinkedFile);
+        _backend = new NativeBackend(_stateDir, SelectLinkedFile);
         _server = new NativeHttpServer(ReadEmbeddedPickerHtml(), _backend);
         _server.Start();
 
@@ -87,7 +93,67 @@ internal sealed class MainForm : Form
             "AnimeCharacterRandomPickerWebView2");
 
         Shown += async (_, _) => await InitializeWebViewAsync();
+        FormClosing += (_, _) => SaveWindowState();
         FormClosed += (_, _) => _server.Dispose();
+    }
+
+    private void RestoreWindowState()
+    {
+        try
+        {
+            if (!File.Exists(_windowStatePath)) return;
+
+            var state = JsonSerializer.Deserialize<WindowStateData>(
+                File.ReadAllText(_windowStatePath));
+            if (state is null) return;
+
+            var bounds = new Rectangle(
+                state.X,
+                state.Y,
+                Math.Max(MinimumSize.Width, state.Width),
+                Math.Max(MinimumSize.Height, state.Height));
+
+            if (!Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(bounds))) return;
+
+            StartPosition = FormStartPosition.Manual;
+            Bounds = bounds;
+            if (state.Maximized) WindowState = FormWindowState.Maximized;
+        }
+        catch
+        {
+            StartPosition = FormStartPosition.CenterScreen;
+        }
+    }
+
+    private void SaveWindowState()
+    {
+        try
+        {
+            Directory.CreateDirectory(_stateDir);
+            var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            var state = new WindowStateData
+            {
+                X = bounds.X,
+                Y = bounds.Y,
+                Width = bounds.Width,
+                Height = bounds.Height,
+                Maximized = WindowState == FormWindowState.Maximized
+            };
+
+            File.WriteAllText(
+                _windowStatePath,
+                JsonSerializer.Serialize(state));
+        }
+        catch { }
+    }
+
+    private sealed class WindowStateData
+    {
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public bool Maximized { get; set; }
     }
 
     private static byte[] ReadEmbeddedPickerHtml()
