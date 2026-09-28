@@ -1,11 +1,11 @@
 {
     "schema":  1,
     "enabled":  true,
-    "version":  "66",
-    "published_at":  "2026-09-28T14:41:58Z",
+    "version":  "67",
+    "published_at":  "2026-09-28T15:09:36Z",
     "core":  {
-                 "url":  "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/anime-picker-updates/releases/66/AnimePickerCore.exe",
-                 "sha256":  "59c6e62d9481339a47fe9b78774b58e1aa1d2ecd1e6eb7b95c61a2d49bfa3bf8",
-                 "size":  1827515
+                 "url":  "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/anime-picker-updates/releases/67/AnimePickerCore.exe",
+                 "sha256":  "1b8895fd6f8ce27f374310a545ceba38149bd1226e45341b83dc7c1239b84f25",
+                 "size":  1831611
              }
 }

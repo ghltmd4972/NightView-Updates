@@ -65,7 +65,7 @@ internal sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "애니 캐릭터 랜덤 추첨기 — 최신 업데이트 완료 · v66";
+        Text = "애니 캐릭터 랜덤 추첨기 — 최신 업데이트 완료 · v67";
         StartPosition = FormStartPosition.CenterScreen;
         Width = 1280;
         Height = 900;

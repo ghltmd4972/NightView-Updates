@@ -2335,6 +2335,26 @@ function cleanJoinPart(value) {
         .trim();
 }
 
+const FOOTWEAR_TAG_RE = /\b(?:footwear|shoes?|sneakers?|boots?|loafers?|sandals?|slippers?|pumps?|mary\s+janes?|flip\s*flops?|geta|zori|crocs?|clogs?|moccasins?|espadrilles?|ballet\s+flats?|high\s+heels?|platform\s+heels?|high\s*heeled)\b/i;
+
+function stripFootwearTags(value) {
+    return String(value || "")
+        .split(",")
+        .map(tag => tag.trim())
+        .filter(Boolean)
+        .filter(tag => {
+            const normalized = tag
+                .replace(/[{}_]/g, " ")
+                .replace(/\d+(?:\.\d+)?\s*::/g, " ")
+                .replace(/::/g, " ")
+                .replace(/[-/]+/g, " ")
+                .replace(/\s+/g, " ")
+                .trim();
+            return !FOOTWEAR_TAG_RE.test(normalized);
+        })
+        .join(", ");
+}
+
 function buildCombinedPrompt() {
     const parts = [];
     let gazeAssistAppliedToExpression = false;
@@ -2359,7 +2379,13 @@ function buildCombinedPrompt() {
     }
     const custom = cleanJoinPart(customTagsEl.value);
     if (custom) parts.push(custom);
-    combinedPromptEl.value=parts[0]?'{'+parts.map(cleanJoinPart).join(', ').replace(/,\s*,+/g,', ')+'}':'';
+
+    const bodyAssistActive = $("useBodyAssist").checked && selectedBodyAssists.length > 0;
+    const finalParts = bodyAssistActive
+        ? parts.map(stripFootwearTags).map(cleanJoinPart).filter(Boolean)
+        : parts.map(cleanJoinPart).filter(Boolean);
+
+    combinedPromptEl.value=finalParts[0]?'{'+finalParts.join(', ').replace(/,\s*,+/g,', ')+'}':'';
 }
 
 function setComposerChecks(base, face, expression, upper, lowerHint, lower, body, effect) {
@@ -3143,6 +3169,8 @@ async function runSelfTest() {
         push("후면 분류", inferExpressionViewCategory("from_behind, back_to_viewer, face_hidden") === "후면·등보임");
         push("눈 상태 상세 분류", inferExpressionEyeState("half-closed_eyes, eyes_rolling_back") === "눈풀림·롤링");
         push("신체 보조 태그 버튼 10개", bodyAssistButtonsEl.children.length === 10, `count=${bodyAssistButtonsEl.children.length}`);
+        const footwearFilterProbe = stripFootwearTags("black shoes, white socks, sandals, slippers, ankle boots, barefoot, thighhighs, red sneakers, brown loafers, high heels");
+        push("신체 보조 활성 시 신발류 자동 제거", footwearFilterProbe === "white socks, barefoot, thighhighs", footwearFilterProbe);
         push("하의 연상 보조 태그 버튼 5개", lowerHintButtonsEl.children.length === 5, `count=${lowerHintButtonsEl.children.length}`);
         push("구도 랜덤 버튼 연결 함수", typeof pickRandomExpressionByMode === "function" && !!randomByViewBtnEl);
         push("표정 랜덤 버튼 연결 함수", typeof pickRandomExpressionByMode === "function" && !!randomByCategoryBtnEl);
