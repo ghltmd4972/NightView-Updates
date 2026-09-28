@@ -1,0 +1,11 @@
+﻿{
+    "schema":  1,
+    "enabled":  true,
+    "version":  "60",
+    "published_at":  "2026-09-28T09:27:41Z",
+    "core":  {
+                 "url":  "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/anime-picker-updates/releases/60/AnimePickerCore.exe",
+                 "sha256":  "67c7f8769fcf09f2c2b785a09f905c1200834a314fc3a98d25d94f8e90af905f",
+                 "size":  8621568
+             }
+}
