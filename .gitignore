@@ -1,0 +1,6 @@
+native/bin/
+native/obj/
+native/publish/
+native/publish_fdd/
+*.user
+*.suo
