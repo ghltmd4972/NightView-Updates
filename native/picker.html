@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>애니 캐릭터 랜덤 추첨기</title>
+<title>애니 캐릭터 랜덤 추첨기 v46</title>
 <style>
 :root {
 color-scheme: dark;
@@ -594,94 +594,6 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
     .scroll-top-btn:hover { background: #232a35; }
     .scroll-bottom-btn { bottom: 64px; }
 
-    /* v62: 좌우 2분할 작업공간 */
-    .wrap {
-        width: min(1680px, calc(100% - 28px));
-        margin: 18px auto 26px;
-    }
-    .app-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
-        margin-bottom: 14px;
-    }
-    .app-header h1 {
-        margin: 0;
-        font-size: clamp(26px, 3vw, 38px);
-    }
-    .top-toolbar {
-        margin: 0;
-        justify-content: flex-end;
-    }
-    .hidden-maintenance {
-        display: none !important;
-    }
-    .workspace-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.04fr);
-        gap: 16px;
-        align-items: start;
-    }
-    .workspace-pane {
-        min-width: 0;
-    }
-    .draw-controls {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 9px;
-        margin-bottom: 12px;
-    }
-    .draw-controls .check {
-        margin-left: auto;
-    }
-    .workspace-pane .card {
-        padding: 20px;
-    }
-    .workspace-right .body-tag-section:first-child {
-        margin-top: 0;
-        padding-top: 0;
-        border-top: 0;
-    }
-    @media (min-width: 1101px) {
-        .workspace-pane {
-            height: calc(100vh - 96px);
-            overflow-y: auto;
-            overflow-x: hidden;
-            scrollbar-gutter: stable;
-            padding-right: 5px;
-        }
-        .search-section {
-            margin-bottom: 12px;
-        }
-        .stats {
-            margin: 8px 0 12px;
-        }
-    }
-    @media (max-width: 1100px) {
-        .workspace-grid { grid-template-columns: 1fr; }
-        .workspace-pane {
-            height: auto;
-            overflow: visible;
-            padding-right: 0;
-        }
-    }
-    @media (max-width: 760px) {
-        .app-header {
-            align-items: flex-start;
-            flex-direction: column;
-        }
-        .top-toolbar {
-            width: 100%;
-            justify-content: flex-start;
-        }
-        .draw-controls .check {
-            margin-left: 0;
-            flex-basis: 100%;
-        }
-    }
-
     @media (max-width: 800px) {
         .split-grid { grid-template-columns: 1fr; }
         .body-tag-grid { grid-template-columns: 1fr; }
@@ -704,32 +616,22 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
 </head>
 <body>
 <div class="wrap">
-    <div class="app-header">
-        <h1>애니 캐릭터 랜덤 추첨기</h1>
-        <div class="toolbar top-toolbar">
-            <button id="syncAllBtn" type="button">⟳ 캐릭터/표정 동기화 새로고침</button>
-            <button id="healthCheckBtn" type="button">✓ 전체 자체 점검</button>
-        </div>
-    </div>
+    <h1>애니 캐릭터 랜덤 추첨기</h1>
+    <p class="sub">한 번 누르면 작품명, 캐릭터명, 해당 프롬프트를 한 묶음으로 랜덤 추출합니다. 프롬프트를 <b>상의, ... 하의, ...</b> 형식으로 사용합니다. 구형 옷/바지 표기는 메모장 업데이트 시 자동 변환합니다.</p>
 
-    <div class="hidden-maintenance" aria-hidden="true">
+    <div class="toolbar">
+        <button id="drawBtn" class="primary">🎲 랜덤 추첨</button>
+        <button id="resetBtn">↺ 추첨 기록 초기화</button>
         <button id="characterConnectBtn" class="file-label" type="button">캐릭터 메모장 업데이트</button>
         <input id="updateInput" type="file" accept=".txt,text/plain">
         <button id="expressionConnectBtn" type="button">표정 TXT 연결</button>
         <input id="expressionInput" type="file" accept=".txt,text/plain">
+        <button id="syncAllBtn" type="button">⟳ 캐릭터/표정 동기화 새로고침</button>
+        <button id="healthCheckBtn" type="button">✓ 전체 자체 점검</button>
+        <label class="check"><input id="noRepeat" type="checkbox" checked> 중복 없이 추첨</label>
     </div>
 
-    <div class="selftest-panel" id="selftestPanel"></div>
-
-    <div class="workspace-grid">
-        <div class="workspace-pane workspace-left">
-            <div class="draw-controls">
-                <button id="drawBtn" class="primary">🎲 랜덤 추첨</button>
-                <button id="resetBtn">↺ 추첨 기록 초기화</button>
-                <label class="check"><input id="noRepeat" type="checkbox" checked> 중복 없이 추첨</label>
-            </div>
-
-            <section class="search-section" aria-label="캐릭터 검색">
+    <section class="search-section" aria-label="캐릭터 검색">
         <div class="search-row">
             <input id="searchInput" class="search-input" type="search"
                    placeholder="작품명 또는 캐릭터명 검색 (예: 오버로드, 니베랄)"
@@ -807,13 +709,6 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
                 </div>
             </div>
 
-        </div>
-    </section>
-        </div>
-
-        <div class="workspace-pane workspace-right">
-    <section class="card">
-        <div class="prompt-grid">
             <div class="body-tag-section">
                 <div class="section-head">
                     <div class="label">신체 보조 태그 · 맨허벅지 / 맨다리 / 맨발 / 발가락 보정</div>
@@ -948,9 +843,6 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
         </div>
     </section>
 
-        </div>
-    </div>
-
     <div class="hint">
         <b>검색</b>은 작품명·캐릭터명·복장명으로 현재 데이터 전체를 찾고, 결과를 누르면 해당 캐릭터를 바로 불러옵니다.<br>
         <b>전체 자체 점검</b>은 화면 파일·저장 폴더·브라우저·캐릭터/표정 저장 데이터·표정 TXT 연결 상태를 한 번에 검사합니다. 저장 파일이 손상되면 직전 백업본으로 자동 복구합니다.<br>
@@ -966,6 +858,7 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
         <b>상의 태그용 하의 연상 보조 태그</b>에서는 <b>no pants, no skirt, no shorts</b> 같은 태그를 여러 개 골라 조합기에 함께 넣을 수 있습니다.<br>
         아래 <b>프롬프트 조합기</b>에서는 기본/표정/상의/하의/보조 태그를 체크해서 합치고, 직접 태그를 붙여넣거나 최종 결과를 편집한 뒤 한 번에 복사할 수 있습니다.
     </div>
+    <div class="selftest-panel" id="selftestPanel"></div>
 </div>
 
 
