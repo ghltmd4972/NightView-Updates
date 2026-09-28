@@ -83,7 +83,7 @@ func main() {
 
 func resolveCore(appDir, logPath string) (string, error) {
 	client := &http.Client{Timeout: 8 * time.Second}
-	m, err := fetchManifest(client, manifestURL)
+	m, err := fetchManifest(client, manifestURL+"?t="+fmt.Sprint(time.Now().UnixNano()))
 	if err == nil && m.Enabled {
 		if err := validateManifest(m); err == nil {
 			corePath, err := ensureVersionedCore(client, appDir, m)
