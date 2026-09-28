@@ -82,14 +82,25 @@ func main() {
 }
 
 func resolveCore(appDir, logPath string) (string, error) {
+	current, currentPath, hasCurrent := loadCurrentRecord(appDir)
 	client := &http.Client{Timeout: 8 * time.Second}
 	m, err := fetchManifest(client, manifestURL+"?t="+fmt.Sprint(time.Now().UnixNano()))
 	if err == nil && m.Enabled {
 		if err := validateManifest(m); err == nil {
+			if hasCurrent && !recordMatchesManifest(current, m) {
+				if !confirmUpdate(current.Version, m.Version) {
+					appendLog(logPath, "update declined; using version "+current.Version)
+					return currentPath, nil
+				}
+			}
+
 			corePath, err := ensureVersionedCore(client, appDir, m)
 			if err == nil {
 				if err := saveCurrent(appDir, m, corePath); err != nil {
 					appendLog(logPath, "save current warning: "+err.Error())
+				}
+				if err := pruneCachedVersions(appDir, corePath); err != nil {
+					appendLog(logPath, "old version cleanup warning: "+err.Error())
 				}
 				appendLog(logPath, "ready version "+m.Version+" -> "+corePath)
 				return corePath, nil
@@ -102,9 +113,9 @@ func resolveCore(appDir, logPath string) (string, error) {
 		appendLog(logPath, "manifest warning: "+err.Error())
 	}
 
-	if cached := loadCurrent(appDir); cached != "" {
-		appendLog(logPath, "using cached core "+cached)
-		return cached, nil
+	if hasCurrent {
+		appendLog(logPath, "using cached core "+currentPath)
+		return currentPath, nil
 	}
 
 	legacy := filepath.Join(appDir, coreName)
@@ -208,27 +219,69 @@ func saveCurrent(appDir string, m manifest, corePath string) error {
 	return os.Rename(temp, path)
 }
 
-func loadCurrent(appDir string) string {
+func loadCurrentRecord(appDir string) (currentRecord, string, bool) {
+	var rec currentRecord
 	data, err := os.ReadFile(filepath.Join(appDir, currentName))
 	if err != nil {
-		return ""
+		return rec, "", false
 	}
-	var rec currentRecord
 	if json.Unmarshal(bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF}), &rec) != nil {
-		return ""
+		return currentRecord{}, "", false
 	}
 	if strings.TrimSpace(rec.RelativePath) == "" {
-		return ""
+		return currentRecord{}, "", false
 	}
 	path := filepath.Clean(filepath.Join(appDir, rec.RelativePath))
 	rel, err := filepath.Rel(appDir, path)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return ""
+		return currentRecord{}, "", false
 	}
 	if _, err := os.Stat(path); err != nil {
+		return currentRecord{}, "", false
+	}
+	return rec, path, true
+}
+
+func loadCurrent(appDir string) string {
+	_, path, ok := loadCurrentRecord(appDir)
+	if !ok {
 		return ""
 	}
 	return path
+}
+
+func recordMatchesManifest(rec currentRecord, m manifest) bool {
+	return strings.TrimSpace(rec.Version) == strings.TrimSpace(m.Version) &&
+		strings.EqualFold(strings.TrimSpace(rec.SHA256), strings.TrimSpace(m.Core.SHA256))
+}
+
+func pruneCachedVersions(appDir, keepCore string) error {
+	versionsDir := filepath.Join(appDir, "versions")
+	entries, err := os.ReadDir(versionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	keepDir := filepath.Clean(filepath.Dir(keepCore))
+	var failures []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Clean(filepath.Join(versionsDir, entry.Name()))
+		if strings.EqualFold(dir, keepDir) {
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			failures = append(failures, entry.Name()+": "+err.Error())
+		}
+	}
+	if len(failures) > 0 {
+		return errors.New(strings.Join(failures, "; "))
+	}
+	return nil
 }
 
 func newestCachedCore(appDir string) string {

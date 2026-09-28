@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,4 +45,31 @@ func TestValidateManifest(t *testing.T) {
 	if err := validateManifest(m); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestRecordMatchesManifest(t *testing.T) {
+	rec := currentRecord{Version: "62", SHA256: strings.Repeat("a", 64)}
+	m := manifest{Version: "62", Core: coreEntry{SHA256: strings.Repeat("A", 64)}}
+	if !recordMatchesManifest(rec, m) {
+		t.Fatal("expected current record to match manifest")
+	}
+	m.Version = "63"
+	if recordMatchesManifest(rec, m) {
+		t.Fatal("different version must require update")
+	}
+}
+
+func TestPruneCachedVersions(t *testing.T) {
+	appDir := t.TempDir()
+	keepDir := filepath.Join(appDir, "versions", "63-new")
+	oldDir := filepath.Join(appDir, "versions", "62-old")
+	if err := os.MkdirAll(keepDir, 0o755); err != nil { t.Fatal(err) }
+	if err := os.MkdirAll(oldDir, 0o755); err != nil { t.Fatal(err) }
+	keepCore := filepath.Join(keepDir, coreName)
+	if err := os.WriteFile(keepCore, []byte("new"), 0o644); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(oldDir, coreName), []byte("old"), 0o644); err != nil { t.Fatal(err) }
+
+	if err := pruneCachedVersions(appDir, keepCore); err != nil { t.Fatal(err) }
+	if _, err := os.Stat(keepDir); err != nil { t.Fatalf("keep dir removed: %v", err) }
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) { t.Fatalf("old dir still exists: %v", err) }
 }

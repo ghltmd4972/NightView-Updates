@@ -34,3 +34,21 @@ func showError(text string) {
 	const mbIconError = 0x00000010
 	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(textPtr)), uintptr(unsafe.Pointer(titlePtr)), mbOK|mbIconError)
 }
+
+func confirmUpdate(oldVersion, newVersion string) bool {
+	titlePtr, _ := syscall.UTF16PtrFromString("애니 캐릭터 랜덤 추첨기")
+	textPtr, _ := syscall.UTF16PtrFromString(
+		"새 업데이트가 있습니다.\n\n현재 버전: " + oldVersion +
+			"\n새 버전: " + newVersion +
+			"\n\n지금 업데이트하시겠습니까?")
+	const mbYesNo = 0x00000004
+	const mbIconInformation = 0x00000040
+	const idYes = 6
+	result, _, _ := procMessageBoxW.Call(
+		0,
+		uintptr(unsafe.Pointer(textPtr)),
+		uintptr(unsafe.Pointer(titlePtr)),
+		mbYesNo|mbIconInformation,
+	)
+	return result == idYes
+}
