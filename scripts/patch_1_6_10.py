@@ -246,7 +246,7 @@ apply_old = '''func (a *viewerApp) applySortMode(sortMode string) {
 	a.invalidate()
 }
 '''
-apply_new = '''func (a *viewerApp) applySortMode(sortMode string) {
+apply_new = r'''func (a *viewerApp) applySortMode(sortMode string) {
 	if _, ok := validSortModes[sortMode]; !ok {
 		sortMode = SortNameAsc
 	}
