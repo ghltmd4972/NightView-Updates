@@ -1,0 +1,50 @@
+name: Inspect NightView sort exact sections
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-sort-exact-1-6-9.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: pwsh
+        run: |
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'source.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf source.tar.gz -C buildsrc
+      - name: Print exact sort sections
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $core = Get-Content core.go
+          $main = Get-Content main_windows.go
+
+          function PrintRange($lines, [string]$startPattern, [string]$endPattern) {
+            $s=-1
+            for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $startPattern){$s=$i;break} }
+            Write-Host ("=== " + $startPattern + " @ " + ($s+1) + " ===")
+            if($s -lt 0){ return }
+            $e=$lines.Count-1
+            for($j=$s+1;$j -lt $lines.Count;$j++){ if($lines[$j] -match $endPattern){$e=$j-1;break} }
+            for($k=$s;$k -le $e;$k++){ Write-Host ("{0:D4}: {1}" -f ($k+1),$lines[$k]) }
+          }
+
+          PrintRange $core '^const \(' '^var '
+          PrintRange $core '^var validSortModes' '^func '
+          PrintRange $core '^func sortImagePaths' '^func collectSortEntries'
+          PrintRange $core '^func lessSortEntry' '^func '
+          PrintRange $core '^func naturalLess' '^func '
+          PrintRange $main '^func \(a \*viewerApp\) showContextMenu' '^func '
+          PrintRange $main '^func \(a \*viewerApp\) applySortMode' '^func '
+          PrintRange $main '^func \(a \*viewerApp\) handleCommand' '^func '
