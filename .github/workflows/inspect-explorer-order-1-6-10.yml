@@ -1,0 +1,38 @@
+name: Inspect NightView Explorer-order integration points
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-explorer-order-1-6-10.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and inspect
+        shell: pwsh
+        run: |
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'source.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf source.tar.gz -C buildsrc
+          Write-Host '=== sortImagePaths call sites ==='
+          Get-ChildItem buildsrc -File -Filter *.go | Select-String -Pattern 'sortImagePaths\(' -Context 10,20 | ForEach-Object {
+            Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
+          Write-Host '=== folder refresh / scan functions ==='
+          Get-Content buildsrc\main_windows.go | Select-String -Pattern 'scan|refresh|folder|a\.files|currentIndex|SortMode' -CaseSensitive:$false -Context 8,24 | ForEach-Object {
+            Write-Host ('--- line ' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
