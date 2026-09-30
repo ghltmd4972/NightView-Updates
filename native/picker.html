@@ -46,6 +46,63 @@ gap: 10px;
 align-items: center;
 margin-bottom: 16px;
 }
+.settings-overlay {
+position: fixed;
+inset: 0;
+z-index: 10000;
+display: none;
+place-items: center;
+padding: 24px;
+background: rgba(5, 7, 10, .72);
+backdrop-filter: blur(5px);
+}
+.settings-overlay.visible { display: grid; }
+.settings-panel {
+width: min(760px, 100%);
+max-height: min(720px, calc(100vh - 48px));
+overflow-y: auto;
+border: 1px solid var(--line);
+background: #171b22;
+border-radius: 20px;
+padding: 24px;
+box-shadow: 0 26px 90px rgba(0,0,0,.5);
+}
+.settings-header {
+display: flex;
+align-items: center;
+justify-content: space-between;
+gap: 16px;
+margin-bottom: 20px;
+}
+.settings-title { font-size: 24px; font-weight: 850; }
+.settings-sub { color: var(--muted); font-size: 13px; line-height: 1.55; margin-top: 5px; }
+.settings-list { display: grid; gap: 14px; }
+.settings-item {
+border: 1px solid var(--line);
+background: #101319;
+border-radius: 14px;
+padding: 16px;
+}
+.settings-item-title { font-weight: 800; margin-bottom: 9px; }
+.settings-path-row {
+display: grid;
+grid-template-columns: 1fr auto;
+gap: 10px;
+align-items: center;
+}
+.settings-path {
+width: 100%;
+min-width: 0;
+height: 44px;
+border: 1px solid #343b47;
+background: #0c0f14;
+color: #dfe4ea;
+border-radius: 10px;
+padding: 0 12px;
+font-family: Consolas, "D2Coding", monospace;
+font-size: 12px;
+}
+.settings-path-note { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 button, .file-label {
 border: 1px solid var(--line);
 background: var(--panel2);
@@ -710,6 +767,7 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
         <h1>애니 캐릭터 랜덤 추첨기</h1>
         <div class="toolbar top-toolbar">
             <button id="syncAllBtn" type="button">⟳ 캐릭터/표정 동기화 새로고침</button>
+            <button id="settingsBtn" type="button">⚙ 설정</button>
             <button id="healthCheckBtn" type="button">✓ 전체 자체 점검</button>
         </div>
     </div>
@@ -719,6 +777,36 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
         <input id="updateInput" type="file" accept=".txt,text/plain">
         <button id="expressionConnectBtn" type="button">표정 TXT 연결</button>
         <input id="expressionInput" type="file" accept=".txt,text/plain">
+    </div>
+
+    <div class="settings-overlay" id="settingsOverlay" aria-hidden="true">
+        <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+            <div class="settings-header">
+                <div>
+                    <div class="settings-title" id="settingsTitle">설정</div>
+                    <div class="settings-sub">연결된 메모장 위치를 확인하거나 언제든 다른 TXT 파일로 변경할 수 있습니다.</div>
+                </div>
+                <button id="settingsCloseBtn" type="button">닫기</button>
+            </div>
+            <div class="settings-list">
+                <div class="settings-item">
+                    <div class="settings-item-title">캐릭터 메모장 위치</div>
+                    <div class="settings-path-row">
+                        <input id="settingsCharacterPath" class="settings-path" type="text" readonly value="확인 중...">
+                        <button id="settingsCharacterChangeBtn" type="button">변경</button>
+                    </div>
+                    <div class="settings-path-note">변경하면 선택한 캐릭터 TXT를 즉시 읽고 저장합니다. 이후 메모장을 수정한 뒤 상단 동기화 새로고침으로 다시 반영할 수 있습니다.</div>
+                </div>
+                <div class="settings-item">
+                    <div class="settings-item-title">표정 메모장 위치</div>
+                    <div class="settings-path-row">
+                        <input id="settingsExpressionPath" class="settings-path" type="text" readonly value="확인 중...">
+                        <button id="settingsExpressionChangeBtn" type="button">변경</button>
+                    </div>
+                    <div class="settings-path-note">변경하면 선택한 표정 TXT를 즉시 읽고 저장합니다. 이후 메모장을 수정한 뒤 상단 동기화 새로고침으로 다시 반영할 수 있습니다.</div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="selftest-panel" id="selftestPanel"></div>
@@ -2335,7 +2423,7 @@ function cleanJoinPart(value) {
         .trim();
 }
 
-const FOOTWEAR_TAG_RE = /\b(?:footwear|shoes?|sneakers?|boots?|loafers?|sandals?|slippers?|pumps?|mary\s+janes?|flip\s*flops?|geta|zori|crocs?|clogs?|moccasins?|espadrilles?|ballet\s+flats?|high\s+heels?|platform\s+heels?|high\s*heeled)\b/i;
+const FOOTWEAR_TAG_RE = /\b(?:footwear|legwear|hosiery|shoes?|sneakers?|boots?|loafers?|sandals?|slippers?|pumps?|mary\s+janes?|flip\s*flops?|geta|zori|uwabaki|crocs?|clogs?|moccasins?|espadrilles?|ballet\s+flats?|high\s+heels?|platform\s+heels?|high\s*heeled|stilettos?|skates?|socks?|ankle\s+socks?|kneehighs?|knee\s+highs?|thighhighs?|thigh\s+highs?|stockings?|pantyhose|tights)\b/i;
 
 function stripFootwearTags(value) {
     return String(value || "")
@@ -2929,6 +3017,45 @@ function installGlobalErrorGuard() {
     });
 }
 
+async function refreshSettingsPaths() {
+    const characterPathEl = $("settingsCharacterPath");
+    const expressionPathEl = $("settingsExpressionPath");
+    characterPathEl.value = "확인 중...";
+    expressionPathEl.value = "확인 중...";
+    try {
+        const response = await fetch("/api/health", {cache: "no-store"});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const health = await response.json();
+        const items = Array.isArray(health?.items) ? health.items : [];
+        const character = items.find(item => item?.name === "캐릭터 TXT 연결");
+        const expression = items.find(item => item?.name === "표정 TXT 연결");
+        const pathText = item => {
+            const detail = String(item?.detail || "").trim();
+            if (!detail || detail === "연결 없음") return "연결된 메모장 없음";
+            return detail.replace(/^연결된 파일을 찾을 수 없음:\s*/, "[파일 없음] ");
+        };
+        characterPathEl.value = pathText(character);
+        expressionPathEl.value = pathText(expression);
+    } catch (error) {
+        characterPathEl.value = "경로 확인 실패";
+        expressionPathEl.value = "경로 확인 실패";
+        console.error("설정 메모장 경로 확인 실패", error);
+    }
+}
+
+async function openSettingsOverlay() {
+    const overlay = $("settingsOverlay");
+    overlay.classList.add("visible");
+    overlay.setAttribute("aria-hidden", "false");
+    await refreshSettingsPaths();
+}
+
+function closeSettingsOverlay() {
+    const overlay = $("settingsOverlay");
+    overlay.classList.remove("visible");
+    overlay.setAttribute("aria-hidden", "true");
+}
+
 function showToast(msg) {
     toastEl.textContent = msg;
 }
@@ -2961,6 +3088,25 @@ $("clearExpressionBtn").addEventListener("click", clearSelectedExpression);
 randomByViewBtnEl.addEventListener("click", () => pickRandomExpressionByMode("view"));
 randomByCategoryBtnEl.addEventListener("click", () => pickRandomExpressionByMode("category"));
 $("syncAllBtn").addEventListener("click", syncAllData);
+$("settingsBtn").addEventListener("click", openSettingsOverlay);
+$("settingsCloseBtn").addEventListener("click", closeSettingsOverlay);
+$("settingsCharacterChangeBtn").addEventListener("click", async () => {
+    await connectCharacterFile();
+    await refreshSettingsPaths();
+});
+$("settingsExpressionChangeBtn").addEventListener("click", async () => {
+    await connectExpressionFile();
+    await refreshSettingsPaths();
+});
+$("settingsOverlay").addEventListener("click", event => {
+    if (event.target === $("settingsOverlay")) closeSettingsOverlay();
+});
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && $("settingsOverlay").classList.contains("visible")) {
+        event.preventDefault();
+        closeSettingsOverlay();
+    }
+});
 $("healthCheckBtn").addEventListener("click", () => runHealthCheck(true));
 
 $("characterConnectBtn").addEventListener("click", connectCharacterFile);
@@ -3169,8 +3315,9 @@ async function runSelfTest() {
         push("후면 분류", inferExpressionViewCategory("from_behind, back_to_viewer, face_hidden") === "후면·등보임");
         push("눈 상태 상세 분류", inferExpressionEyeState("half-closed_eyes, eyes_rolling_back") === "눈풀림·롤링");
         push("신체 보조 태그 버튼 10개", bodyAssistButtonsEl.children.length === 10, `count=${bodyAssistButtonsEl.children.length}`);
-        const footwearFilterProbe = stripFootwearTags("black shoes, white socks, sandals, slippers, ankle boots, barefoot, thighhighs, red sneakers, brown loafers, high heels");
-        push("신체 보조 활성 시 신발류 자동 제거", footwearFilterProbe === "white socks, barefoot, thighhighs", footwearFilterProbe);
+        const footwearFilterProbe = stripFootwearTags("black shoes, white socks, sandals, slippers, ankle boots, barefoot, thighhighs, pantyhose, stockings, kneehighs, red sneakers, brown loafers, high heels");
+        push("신체 보조 활성 시 신발·양말·스타킹류 자동 제거", footwearFilterProbe === "barefoot", footwearFilterProbe);
+        push("설정 오버레이 구성", !!$("settingsOverlay") && !!$("settingsCharacterPath") && !!$("settingsExpressionPath"));
         push("하의 연상 보조 태그 버튼 5개", lowerHintButtonsEl.children.length === 5, `count=${lowerHintButtonsEl.children.length}`);
         push("구도 랜덤 버튼 연결 함수", typeof pickRandomExpressionByMode === "function" && !!randomByViewBtnEl);
         push("표정 랜덤 버튼 연결 함수", typeof pickRandomExpressionByMode === "function" && !!randomByCategoryBtnEl);
