@@ -1,0 +1,59 @@
+name: Inspect NightView startup flow 1.6.11
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/inspect-startup-1-6-11.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'source.tar.gz'), [Convert]::FromBase64String($text))
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf source.tar.gz -C buildsrc
+      - name: Inspect startup and first-image flow
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host '=== FILES ==='
+          Get-ChildItem -File -Filter *.go | Select-Object -ExpandProperty Name
+
+          Write-Host '=== STARTUP MATCHES ==='
+          Get-ChildItem -File -Filter *.go | Select-String -Pattern 'func main|CreateWindow|ShowWindow|SW_SHOW|SW_HIDE|openImagePath|loadImageAsset|startup|command line|os.Args|fullscreen|toggleFullscreen|first image|initial|ready|invalidate|WM_CREATE|WM_SHOWWINDOW' -CaseSensitive:$false -Context 10,35 | ForEach-Object {
+            Write-Host ('--- ' + $_.Path + ':' + $_.LineNumber + ' ---')
+            $_.Context.PreContext | ForEach-Object { Write-Host $_ }
+            Write-Host $_.Line
+            $_.Context.PostContext | ForEach-Object { Write-Host $_ }
+          }
+
+          $main = Get-Content main_windows.go
+          function PrintFunc([string]$pattern) {
+            $s=-1
+            for($i=0;$i -lt $main.Count;$i++){ if($main[$i] -match $pattern){$s=$i;break} }
+            Write-Host ("=== " + $pattern + " @ " + ($s+1) + " ===")
+            if($s -lt 0){ return }
+            $e=$main.Count-1
+            for($j=$s+1;$j -lt $main.Count;$j++){ if($main[$j] -match '^func '){$e=$j-1;break} }
+            for($k=$s;$k -le $e;$k++){ Write-Host ("{0:D4}: {1}" -f ($k+1),$main[$k]) }
+          }
+
+          PrintFunc '^func main'
+          PrintFunc '^func run'
+          PrintFunc '^func newViewerApp'
+          PrintFunc '^func \(a \*viewerApp\) run'
+          PrintFunc '^func \(a \*viewerApp\) openImagePath'
+          PrintFunc '^func \(a \*viewerApp\) loadPath'
+          PrintFunc '^func \(a \*viewerApp\) toggleFullscreen'
