@@ -1,0 +1,73 @@
+name: Strict verify NightView 1.6.12 Delete behavior
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-delete-1-6-12.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  strict-delete-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+
+      - name: Reconstruct 1.6.12 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((Get-Content VERSION -Raw).Trim() -ne '1.6.12') { throw 'VERSION is not 1.6.12' }
+          $chunks = Get-ChildItem 'source/current/chunk_*.b64' | Sort-Object Name
+          $text = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'source.tar.gz'), [Convert]::FromBase64String($text))
+          $expected = ((Get-Content SOURCE_SHA256.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "source hash mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf source.tar.gz -C buildsrc
+
+      - name: Strict targeted Delete tests
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $output = (& go test -count=1 -v -run 'TestRemoveCurrentPathAfterDeleteSelectsNext|TestRemoveCurrentPathAfterDeleteFallsBackToPreviousAtEnd|TestRemoveOnlyImageLeavesEmptyViewer|TestMoveFileToRecycleBinRemovesSourcePath' . 2>&1) | Tee-Object -Variable captured
+          $exit = $LASTEXITCODE
+          $output | Write-Host
+          if ($exit -ne 0) { throw "Delete tests failed with exit code $exit" }
+          $joined = ($captured -join [Environment]::NewLine)
+          if ($joined -match '--- SKIP:') { throw 'A Delete test was skipped; strict verification requires an actual recycle-bin operation.' }
+          foreach ($name in @(
+            'TestRemoveCurrentPathAfterDeleteSelectsNext',
+            'TestRemoveCurrentPathAfterDeleteFallsBackToPreviousAtEnd',
+            'TestRemoveOnlyImageLeavesEmptyViewer',
+            'TestMoveFileToRecycleBinRemovesSourcePath'
+          )) {
+            if ($joined -notmatch ('--- PASS: ' + [regex]::Escape($name))) {
+              throw "Missing PASS for $name"
+            }
+          }
+
+      - name: Strict build and vet
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.12" -o ..\NightViewStrictVerified.exe .
+          go vet -unsafeptr=false .
+          if ((Get-Item ..\NightViewStrictVerified.exe).Length -le 0) { throw 'Strict verified executable is empty' }
