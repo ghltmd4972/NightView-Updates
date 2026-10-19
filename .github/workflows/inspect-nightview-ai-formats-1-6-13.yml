@@ -24,7 +24,11 @@ jobs:
           echo "=== GO PACKAGE ==="
           cat /tmp/nightview-v1src/go.mod | head -35
           echo "=== AI SUPPORTED TYPES ==="
-          rg -n -C 8 'JPG/JPEG/PNG|GIF/BMP/TIFF/ICO|func .*startAIUpscale|func .*runAIUpscale|func .*commitAIOutput|func .*saveAI4KAsPNG|func .*transcodeWebPToTempPNG|func .*decode|func .*prepare.*AI|func .*startAI' /tmp/nightview-v1src --glob '*.go' | head -n 290 || true
+          grep -nER -C 8 'aiInputSupported|JPG/JPEG/PNG|func .*startAIUpscale|func .*runAIUpscale|func .*commitAIOutput|func .*saveAI4KAsPNG|func .*transcodeWebPToTempPNG|func .*decode|func .*prepare.*AI|func .*startAI' /tmp/nightview-v1src --include='*.go' | head -n 310 || true
+          echo "=== AI WINDOWS FULL SOURCE (first 300 lines) ==="
+          sed -n '1,300p' /tmp/nightview-v1src/ai_windows.go
+          echo "=== AI CORE REFERENCES ==="
+          grep -nER -C 4 'func aiInputSupported|func .*ai.*Input|transcodeWebPToTempPNG|commitAIOutput|runAIUpscale' /tmp/nightview-v1src --include='*.go' | head -n 200 || true
           echo "=== AI WINDOWS IMPORTS ==="
           sed -n '1,100p' /tmp/nightview-v1src/ai_windows.go
           echo "=== SOURCE FILES ==="
