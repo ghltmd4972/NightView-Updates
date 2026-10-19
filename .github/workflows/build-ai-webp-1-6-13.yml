@@ -1,0 +1,100 @@
+name: Build NightView 1.6.13 WebP AI preview candidate
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/build-ai-webp-1-6-13.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightview-ai-webp-1-6-13
+  cancel-in-progress: false
+
+jobs:
+  build-and-verify:
+    runs-on: windows-latest
+    env:
+      GOFLAGS: -buildvcs=false
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          check-latest: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Reconstruct 1.6.12 source and verify exact hash
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((Get-Content VERSION -Raw).Trim() -ne '1.6.12') { throw 'Unexpected source version' }
+          $chunks = Get-ChildItem source/current/chunk_*.b64 | Sort-Object Name
+          if ($chunks.Count -lt 1) { throw 'No source chunks' }
+          $content = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes((Join-Path $PWD 'nightview-source.tar.gz'), [Convert]::FromBase64String($content))
+          $expected = ((Get-Content SOURCE_SHA256.txt -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash nightview-source.tar.gz -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) { throw "Source integrity mismatch: $actual != $expected" }
+          New-Item -ItemType Directory -Force buildsrc | Out-Null
+          tar -xzf nightview-source.tar.gz -C buildsrc
+
+      - name: Apply focused WebP AI patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/patch_ai_webp_1_6_13.py buildsrc
+          if ($LASTEXITCODE -ne 0) { throw 'Patch failed' }
+          Push-Location buildsrc
+          gofmt -w ai_core.go ai_core_test.go ai_windows.go ai_webp_input_windows.go ai_webp_input_windows_test.go
+          Pop-Location
+          $ai = Get-Content buildsrc/ai_windows.go -Raw
+          if (-not $ai.Contains('buildAIEngineArgs(inst, engineInput, tmpOutput, scale)')) { throw 'Engine input conversion not wired' }
+          if (-not $ai.Contains('if aiNeedsSafePNGSave(input)')) { throw 'Safe WebP 4K save not wired' }
+
+      - name: Full Windows regression and static checks
+        shell: pwsh
+        working-directory: buildsrc
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go test -count=1 ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Go regression failed' }
+          go vet -unsafeptr=false ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
+          go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.13" -o ../NightView.exe .
+          if ($LASTEXITCODE -ne 0) { throw 'NightView build failed' }
+          $p = (Resolve-Path ../NightView.exe).Path
+          $bytes = [IO.File]::ReadAllBytes($p)
+          if ($bytes.Length -lt 4000000 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw 'Invalid Windows PE executable' }
+          Write-Host "NightView 1.6.13 candidate bytes: $($bytes.Length)"
+          Get-FileHash $p -Algorithm SHA256
+
+      - name: Publish verified candidate only, leave official latest untouched
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = 'candidates/1.6.13'
+          New-Item -ItemType Directory -Force $target | Out-Null
+          Copy-Item NightView.exe "$target/NightView.exe"
+          $hash = (Get-FileHash "$target/NightView.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  NightView.exe" | Set-Content "$target/SHA256SUMS.txt" -Encoding ascii
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add candidates/1.6.13
+          git commit -m 'Add verified NightView 1.6.13 WebP AI candidate'
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate commit failed' }
+          git push
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate upload failed' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NightView-1.6.13-WebP-AI-tested
+          path: NightView.exe
+          retention-days: 7
