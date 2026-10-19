@@ -1,0 +1,31 @@
+name: Inspect NightView AI format inputs 1.6.13
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/inspect-nightview-ai-formats-1-6-13.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct verified source and inspect AI implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat source/current/chunk_*.b64 | base64 -d > /tmp/nightview-source.tar.gz
+          sha256sum -c <(sed 's/nightview-source.tar.gz/\/tmp\/nightview-source.tar.gz/' SOURCE_SHA256.txt)
+          mkdir /tmp/nightview-v1src
+          tar -xzf /tmp/nightview-source.tar.gz -C /tmp/nightview-v1src
+          echo "=== VERSION ==="
+          cat VERSION
+          echo "=== GO PACKAGE ==="
+          cat /tmp/nightview-v1src/go.mod | head -35
+          echo "=== AI SUPPORTED TYPES ==="
+          rg -n -C 8 'JPG/JPEG/PNG|GIF/BMP/TIFF/ICO|func .*startAIUpscale|func .*runAIUpscale|func .*commitAIOutput|func .*saveAI4KAsPNG|func .*transcodeWebPToTempPNG|func .*decode|func .*prepare.*AI|func .*startAI' /tmp/nightview-v1src --glob '*.go' | head -n 290 || true
+          echo "=== AI WINDOWS IMPORTS ==="
+          sed -n '1,100p' /tmp/nightview-v1src/ai_windows.go
+          echo "=== SOURCE FILES ==="
+          find /tmp/nightview-v1src -maxdepth 2 -name '*.go' -printf '%P\n' | head -70
