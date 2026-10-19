@@ -89,7 +89,7 @@ jobs:
             $candidateNames = @([regex]::Matches($candidateLog, $rx) | ForEach-Object {$_.Groups[1].Value} | Sort-Object)
             $baselineNames = @([regex]::Matches($baselineLog, $rx) | ForEach-Object {$_.Groups[1].Value} | Sort-Object)
             if ($candidateNames.Count -eq 0 -or ($candidateNames -join ',') -ne ($baselineNames -join ',')) {
-              throw "New test failures in $package: candidate=$($candidateNames -join ',') baseline=$($baselineNames -join ',')"
+              throw "New test failures in ${package}: candidate=$($candidateNames -join ',') baseline=$($baselineNames -join ',')"
             }
             Write-Host "KNOWN_UNCHANGED_BASELINE_FAILURES package=$package tests=$($baselineNames -join ',')"
           }
