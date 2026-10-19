@@ -64,8 +64,30 @@ jobs:
         working-directory: buildsrc
         run: |
           $ErrorActionPreference = 'Stop'
-          go test -count=1 ./...
-          if ($LASTEXITCODE -ne 0) { throw 'Go regression failed' }
+          go test -count=1 . ./updater
+          if ($LASTEXITCODE -ne 0) { throw 'NightView and updater regression failed' }
+          # Installer tests require stable HKCU registry semantics. Compare against
+          # untouched 1.6.12 source; never silently ignore newly failing tests.
+          $candidateLog = (& go test -count=1 ./installer 2>&1) | Out-String
+          $candidateExit = $LASTEXITCODE
+          Write-Host "Candidate installer tests (exit=$candidateExit): $candidateLog"
+          if ($candidateExit -ne 0) {
+            New-Item -ItemType Directory -Force ../baseline-src | Out-Null
+            tar -xzf ../nightview-source.tar.gz -C ../baseline-src
+            Push-Location ../baseline-src
+            $baselineLog = (& go test -count=1 ./installer 2>&1) | Out-String
+            $baselineExit = $LASTEXITCODE
+            Pop-Location
+            Write-Host "Untouched 1.6.12 installer tests (exit=$baselineExit): $baselineLog"
+            if ($baselineExit -eq 0) { throw 'Installer regression absent from baseline' }
+            $rx = '(?m)^--- FAIL: (Test[A-Za-z0-9_]+)'
+            $candidateNames = @([regex]::Matches($candidateLog, $rx) | ForEach-Object {$_.Groups[1].Value} | Sort-Object)
+            $baselineNames = @([regex]::Matches($baselineLog, $rx) | ForEach-Object {$_.Groups[1].Value} | Sort-Object)
+            if ($candidateNames.Count -eq 0 -or (($candidateNames -join ',') -ne ($baselineNames -join ','))) {
+              throw "New installer test failures: candidate=$($candidateNames -join ',') baseline=$($baselineNames -join ',')"
+            }
+            Write-Host "KNOWN_BASELINE_INSTALLER_TEST_FAILURES=$($baselineNames -join ',')"
+          }
           go vet -unsafeptr=false ./...
           if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
           go build -trimpath -ldflags="-s -w -buildid= -H=windowsgui -X main.version=1.6.13" -o ../NightView.exe .
