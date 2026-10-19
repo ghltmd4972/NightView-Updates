@@ -64,7 +64,7 @@ windows = replace_one(
 windows = replace_one(
     windows,
     'choice := messageBoxResult(a.hwnd, prompt, "NightView AI 4K 저장", aiMBYesNoCancel|MB_ICONINFO)',
-    '''choice := aiIDNo
+    '''choice := uintptr(aiIDNo)
 	if aiNeedsSafePNGSave(input) {
 		messageBox(a.hwnd, "WEBP 원본은 변경하지 않습니다.\\n\\nAI 4K 결과를 PNG로 다른 이름으로 저장하세요.", "NightView AI 4K 저장", MB_OK|MB_ICONINFO)
 	} else {
