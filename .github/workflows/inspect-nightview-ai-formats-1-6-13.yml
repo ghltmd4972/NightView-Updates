@@ -31,5 +31,13 @@ jobs:
           grep -nER -C 4 'func aiInputSupported|func .*ai.*Input|transcodeWebPToTempPNG|commitAIOutput|runAIUpscale' /tmp/nightview-v1src --include='*.go' | head -n 200 || true
           echo "=== AI WINDOWS IMPORTS ==="
           sed -n '1,100p' /tmp/nightview-v1src/ai_windows.go
+          echo "=== FORMAT TRANSCODER ==="
+          sed -n '1690,1800p' /tmp/nightview-v1src/main_windows.go
+          echo "=== AI SAVE CHOICE ==="
+          sed -n '1,235p' /tmp/nightview-v1src/ai_save_windows.go
+          echo "=== AI CORE INPUT AND OUTPUT ==="
+          sed -n '135,260p' /tmp/nightview-v1src/ai_core.go
+          echo "=== AI TEST REFERENCES ==="
+          grep -nE -C 3 'overwriteAI4KOriginal|chooseAI4KSavePath|aiInputSupported|validateAIUpscaleDimensions|nextAIOutputPath' /tmp/nightview-v1src/*test.go | head -n 160 || true
           echo "=== SOURCE FILES ==="
           find /tmp/nightview-v1src -maxdepth 2 -name '*.go' -printf '%P\n' | head -70
