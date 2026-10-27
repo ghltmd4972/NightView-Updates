@@ -1,0 +1,83 @@
+name: Publish AnimePicker Core
+
+on:
+  push:
+    branches:
+      - anime-picker-updates
+    paths:
+      - 'native/**'
+      - '.github/workflows/anime-picker-core.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: anime-picker-core-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout existing AnimePicker update branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build the existing native core
+        shell: pwsh
+        run: |
+          dotnet restore native/AnimePickerNative.csproj
+          if ($LASTEXITCODE -ne 0) { throw "Restore failed" }
+          dotnet publish native/AnimePickerNative.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o dist
+          if ($LASTEXITCODE -ne 0) { throw "Publish failed" }
+          if (-not (Test-Path -LiteralPath 'dist/AnimePickerCore.exe' -PathType Leaf)) { throw "Missing core executable" }
+
+      - name: Publish v69 through existing GitHub auto-update manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '69'
+          $source = 'dist/AnimePickerCore.exe'
+          $hash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item -LiteralPath $source).Length
+          if ($size -lt 200000) { throw "Core executable is unexpectedly small" }
+          $old = Get-Content -LiteralPath 'latest.json' -Raw | ConvertFrom-Json
+          if ([string]$old.version -eq $version -and [string]$old.core.sha256 -eq $hash) {
+            Write-Output 'v69 already matches the built core.'
+            exit 0
+          }
+          $directory = "releases/$version"
+          New-Item -ItemType Directory -Force -Path $directory | Out-Null
+          Copy-Item -LiteralPath $source -Destination "$directory/AnimePickerCore.exe" -Force
+          $manifest = [ordered]@{
+            schema = 1
+            enabled = $true
+            version = $version
+            published_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+            core = [ordered]@{
+              url = "https://raw.githubusercontent.com/ghltmd4972/NightView-Updates/anime-picker-updates/releases/$version/AnimePickerCore.exe"
+              sha256 = $hash
+              size = $size
+            }
+          }
+          $json = $manifest | ConvertTo-Json -Depth 5
+          [System.IO.File]::WriteAllText((Join-Path $PWD 'latest.json'), $json + "`n", [System.Text.UTF8Encoding]::new($false))
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add 'latest.json' "$directory/AnimePickerCore.exe"
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Output 'No publishing changes.'
+            exit 0
+          }
+          git commit -m "Release AnimePicker v69 via existing auto-update channel"
+          if ($LASTEXITCODE -ne 0) { throw "Commit failed" }
+          git push origin HEAD:anime-picker-updates
+          if ($LASTEXITCODE -ne 0) { throw "Push failed" }
