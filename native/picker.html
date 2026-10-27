@@ -3452,8 +3452,10 @@ async function pickerUIRestore() {
         if (!snapshot) {
             try { snapshot = JSON.parse(localStorage.getItem("animePicker.ui.session.v69")); } catch (_) {}
         }
-        if (!snapshot || snapshot.version !== 1) return;
-        if (snapshot.signature === pickerUIDatasetSignature()) {
+        if (!snapshot || (snapshot.version !== 1 && snapshot.v !== 1)) return;
+        const sameDataset = snapshot.signature === pickerUIDatasetSignature() ||
+            (!snapshot.signature && snapshot.count === entries.length);
+        if (sameDataset) {
             if (Array.isArray(snapshot.remaining) && snapshot.remaining.every(i =>
                 Number.isInteger(i) && i >= 0 && i < entries.length
             )) remaining = [...new Set(snapshot.remaining)];
@@ -3471,10 +3473,10 @@ async function pickerUIRestore() {
             const e = expressionEntries.find(e => e.name === snapshot.expression.name && e.tags === snapshot.expression.tags);
             if (e) selectExpression(e);
         }
-        if (Array.isArray(snapshot.lowerHints)) selectedLowerHints = snapshot.lowerHints;
-        if (Array.isArray(snapshot.bodyAssists)) selectedBodyAssists = snapshot.bodyAssists;
-        if (Array.isArray(snapshot.effectAssists)) selectedEffectAssists = snapshot.effectAssists;
-        if (Array.isArray(snapshot.gazeAssists)) selectedGazeAssists = snapshot.gazeAssists;
+        if (Array.isArray(snapshot.lowerHints || snapshot.selectedLowerHints)) selectedLowerHints = snapshot.lowerHints || snapshot.selectedLowerHints;
+        if (Array.isArray(snapshot.bodyAssists || snapshot.selectedBodyAssists)) selectedBodyAssists = snapshot.bodyAssists || snapshot.selectedBodyAssists;
+        if (Array.isArray(snapshot.effectAssists || snapshot.selectedEffectAssists)) selectedEffectAssists = snapshot.effectAssists || snapshot.selectedEffectAssists;
+        if (Array.isArray(snapshot.gazeAssists || snapshot.selectedGazeAssists)) selectedGazeAssists = snapshot.gazeAssists || snapshot.selectedGazeAssists;
         if (snapshot.fields && typeof snapshot.fields === "object") {
             for (const [id, value] of Object.entries(snapshot.fields)) {
                 const el = $(id);
@@ -3492,7 +3494,7 @@ async function pickerUIRestore() {
         if (searchInputEl.value) runSearch();
         buildCombinedPrompt();
         updateStats();
-        if (snapshot.settingsOpen) await openSettingsOverlay();
+        if (snapshot.settingsOpen || snapshot.settings) await openSettingsOverlay();
         if (Array.isArray(snapshot.scroll)) {
             requestAnimationFrame(() => {
                 leftPaneEl.scrollTop = Number(snapshot.scroll[0]) || 0;
