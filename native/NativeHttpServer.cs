@@ -125,6 +125,11 @@ internal sealed class NativeHttpServer : IDisposable
         if (request.Method == "GET" && path == "/api/expression-file/reload")
             return LinkedFileResponse(_backend.ReloadLinked("expression"));
 
+        if (request.Method == "POST" && path == "/api/linked-file/open/character")
+            return HttpResponse.Json(200, _backend.OpenLinkedMemo("character"));
+        if (request.Method == "POST" && path == "/api/linked-file/open/expression")
+            return HttpResponse.Json(200, _backend.OpenLinkedMemo("expression"));
+
         return HttpResponse.Text(404, "not found");
     }
 
@@ -360,6 +365,37 @@ internal sealed class NativeBackend
             return new LinkedFileResult(LinkedFileStatus.None);
 
         return ReadLinkedFile(linked);
+    }
+
+    public object OpenLinkedMemo(string kind)
+    {
+        try
+        {
+            if (kind != "character" && kind != "expression")
+                return new { ok = false, error = "올바르지 않은 메모장 종류입니다." };
+
+            var linked = ReadRememberedPath(kind);
+            if (string.IsNullOrWhiteSpace(linked))
+                return new { ok = false, error = "연결된 메모장이 없습니다." };
+            if (!Path.IsPathFullyQualified(linked) ||
+                !linked.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(linked))
+                return new { ok = false, error = "연결된 TXT 파일을 찾을 수 없습니다." };
+
+            var start = new System.Diagnostics.ProcessStartInfo("notepad.exe")
+            {
+                UseShellExecute = false,
+            };
+            start.ArgumentList.Add(linked);
+            using var process = System.Diagnostics.Process.Start(start);
+            if (process is null)
+                return new { ok = false, error = "메모장을 실행하지 못했습니다." };
+            return new { ok = true };
+        }
+        catch (Exception ex)
+        {
+            return new { ok = false, error = ex.Message };
+        }
     }
 
     public object GetHealth()
