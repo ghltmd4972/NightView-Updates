@@ -768,6 +768,8 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
         <div class="toolbar top-toolbar">
             <button id="syncAllBtn" type="button">⟳ 캐릭터/표정 동기화 새로고침</button>
             <button id="settingsBtn" type="button">⚙ 설정</button>
+            <button id="openCharacterMemoBtn" type="button">캐릭터 메모장 열기</button>
+            <button id="openExpressionMemoBtn" type="button">표정 메모장 열기</button>
             <button id="healthCheckBtn" type="button">✓ 전체 자체 점검</button>
         </div>
     </div>
@@ -793,6 +795,7 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
                     <div class="settings-item-title">캐릭터 메모장 위치</div>
                     <div class="settings-path-row">
                         <input id="settingsCharacterPath" class="settings-path" type="text" readonly value="확인 중...">
+                        <button id="settingsCharacterOpenBtn" type="button">열기</button>
                         <button id="settingsCharacterChangeBtn" type="button">변경</button>
                     </div>
                     <div class="settings-path-note">변경하면 선택한 캐릭터 TXT를 즉시 읽고 저장합니다. 이후 메모장을 수정한 뒤 상단 동기화 새로고침으로 다시 반영할 수 있습니다.</div>
@@ -801,6 +804,7 @@ font: 14px/1.55 Consolas, "D2Coding", monospace;
                     <div class="settings-item-title">표정 메모장 위치</div>
                     <div class="settings-path-row">
                         <input id="settingsExpressionPath" class="settings-path" type="text" readonly value="확인 중...">
+                        <button id="settingsExpressionOpenBtn" type="button">열기</button>
                         <button id="settingsExpressionChangeBtn" type="button">변경</button>
                     </div>
                     <div class="settings-path-note">변경하면 선택한 표정 TXT를 즉시 읽고 저장합니다. 이후 메모장을 수정한 뒤 상단 동기화 새로고침으로 다시 반영할 수 있습니다.</div>
@@ -3394,7 +3398,148 @@ renderGazeAssistButtons();
 renderSelectedGazeAssistTags();
 resetPool(false);
 buildCombinedPrompt();
+
+const PICKER_UI_STATE_NAME = "ui_session";
+let pickerUIRestoring = false;
+let pickerUILastSerialized = "";
+let pickerUIPendingSave = Promise.resolve();
+let pickerUIDebounce = 0;
+
+function pickerUIDatasetSignature() {
+    return [entries.length, entries[0]?.prompt || "", entries[entries.length - 1]?.prompt || ""].join("|");
+}
+function pickerUICapture() {
+    const fields = {};
+    document.querySelectorAll("input[id],select[id],textarea[id]").forEach(element => {
+        if (element.type === "file" || element.readOnly || element.disabled) return;
+        fields[element.id] = element.type === "checkbox" ? element.checked : element.value;
+    });
+    return {
+        version: 1,
+        signature: pickerUIDatasetSignature(),
+        fields,
+        current: current ? { work: current.work, character: current.character, prompt: current.prompt, variant: current.variant || "" } : null,
+        expression: selectedExpression ? { name: selectedExpression.name, tags: selectedExpression.tags } : null,
+        remaining: remaining.slice(),
+        recentWorkHistory: recentWorkHistory.slice(),
+        recentCharacterHistory: recentCharacterHistory.slice(),
+        lowerHints: selectedLowerHints.slice(),
+        bodyAssists: selectedBodyAssists.slice(),
+        effectAssists: selectedEffectAssists.slice(),
+        gazeAssists: selectedGazeAssists.slice(),
+        scroll: [leftPaneEl.scrollTop, rightPaneEl.scrollTop],
+        settingsOpen: $("settingsOverlay").classList.contains("visible")
+    };
+}
+function pickerUISave(force = false) {
+    if (pickerUIRestoring) return;
+    const snapshot = pickerUICapture();
+    const serialized = JSON.stringify(snapshot);
+    if (!force && serialized === pickerUILastSerialized) return;
+    pickerUILastSerialized = serialized;
+    try { localStorage.setItem("animePicker.ui.session.v69", serialized); } catch (_) {}
+    pickerUIPendingSave = pickerUIPendingSave.catch(() => {}).then(() =>
+        savePersistentState(PICKER_UI_STATE_NAME, snapshot)
+    ).catch(error => {
+        pickerUILastSerialized = "";
+        console.warn("화면 상태 저장 실패", error);
+    });
+}
+async function pickerUIRestore() {
+    pickerUIRestoring = true;
+    try {
+        let snapshot = await loadPersistentState(PICKER_UI_STATE_NAME);
+        if (!snapshot) {
+            try { snapshot = JSON.parse(localStorage.getItem("animePicker.ui.session.v69")); } catch (_) {}
+        }
+        if (!snapshot || snapshot.version !== 1) return;
+        if (snapshot.signature === pickerUIDatasetSignature()) {
+            if (Array.isArray(snapshot.remaining) && snapshot.remaining.every(i =>
+                Number.isInteger(i) && i >= 0 && i < entries.length
+            )) remaining = [...new Set(snapshot.remaining)];
+            if (Array.isArray(snapshot.recentWorkHistory)) recentWorkHistory = snapshot.recentWorkHistory.slice(0, 8);
+            if (Array.isArray(snapshot.recentCharacterHistory)) recentCharacterHistory = snapshot.recentCharacterHistory.slice(0, 18);
+            if (snapshot.current) {
+                const e = entries.find(e => e.work === snapshot.current.work &&
+                    e.character === snapshot.current.character &&
+                    e.prompt === snapshot.current.prompt &&
+                    (e.variant || "") === snapshot.current.variant);
+                if (e) renderCurrentEntry(e, "");
+            }
+        }
+        if (snapshot.expression) {
+            const e = expressionEntries.find(e => e.name === snapshot.expression.name && e.tags === snapshot.expression.tags);
+            if (e) selectExpression(e);
+        }
+        if (Array.isArray(snapshot.lowerHints)) selectedLowerHints = snapshot.lowerHints;
+        if (Array.isArray(snapshot.bodyAssists)) selectedBodyAssists = snapshot.bodyAssists;
+        if (Array.isArray(snapshot.effectAssists)) selectedEffectAssists = snapshot.effectAssists;
+        if (Array.isArray(snapshot.gazeAssists)) selectedGazeAssists = snapshot.gazeAssists;
+        if (snapshot.fields && typeof snapshot.fields === "object") {
+            for (const [id, value] of Object.entries(snapshot.fields)) {
+                const el = $(id);
+                if (!el || el.type === "file" || el.readOnly || el.disabled) continue;
+                if (el.type === "checkbox") el.checked = !!value;
+                else if (typeof value === "string") el.value = value;
+            }
+        }
+        renderLowerHintButtons();
+        renderBodyAssistButtons();
+        renderEffectAssistButtons();
+        renderGazeAssistButtons();
+        renderSelectedGazeAssistTags();
+        renderExpressionResults();
+        if (searchInputEl.value) runSearch();
+        buildCombinedPrompt();
+        updateStats();
+        if (snapshot.settingsOpen) await openSettingsOverlay();
+        if (Array.isArray(snapshot.scroll)) {
+            requestAnimationFrame(() => {
+                leftPaneEl.scrollTop = Number(snapshot.scroll[0]) || 0;
+                rightPaneEl.scrollTop = Number(snapshot.scroll[1]) || 0;
+            });
+        }
+    } catch (error) {
+        console.warn("마지막 화면 복원 실패", error);
+    } finally {
+        pickerUIRestoring = false;
+        pickerUIWatch();
+    }
+}
+function pickerUIWatch() {
+    const schedule = () => {
+        clearTimeout(pickerUIDebounce);
+        pickerUIDebounce = setTimeout(() => pickerUISave(), 250);
+    };
+    document.addEventListener("input", schedule, true);
+    document.addEventListener("change", schedule, true);
+    document.addEventListener("click", () => setTimeout(schedule, 0), true);
+    [leftPaneEl, rightPaneEl].forEach(pane => pane.addEventListener("scroll", schedule, { passive: true }));
+    setInterval(() => pickerUISave(), 3000);
+    window.addEventListener("pagehide", () => {
+        const state = pickerUICapture();
+        try { localStorage.setItem("animePicker.ui.session.v69", JSON.stringify(state)); } catch (_) {}
+        try { navigator.sendBeacon("/api/state/ui_session", new Blob([JSON.stringify(state)], { type: "application/json" })); } catch (_) {}
+    });
+    pickerUISave(true);
+}
+async function openLinkedMemo(kind) {
+    const title = kind === "character" ? "캐릭터" : "표정";
+    try {
+        const response = await fetch("/api/linked-file/open/" + kind, { method: "POST" });
+        const result = await response.json();
+        showToast(result.ok ? title + " 메모장을 열었습니다." : title + " 메모장 열기 실패: " + result.error);
+    } catch (error) {
+        showToast(title + " 메모장 실행 오류: " + (error.message || error));
+    }
+}
+$("openCharacterMemoBtn").addEventListener("click", () => openLinkedMemo("character"));
+$("openExpressionMemoBtn").addEventListener("click", () => openLinkedMemo("expression"));
+$("settingsCharacterOpenBtn").addEventListener("click", () => openLinkedMemo("character"));
+$("settingsExpressionOpenBtn").addEventListener("click", () => openLinkedMemo("expression"));
+
 initializePersistentData().then(async () => {
+    await pickerUIRestore();
     await runHealthCheck(false);
     const params = new URLSearchParams(location.search);
     if (params.get("selftest") === "1") setTimeout(runSelfTest, 300);
